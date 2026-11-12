@@ -8,9 +8,13 @@
 - Files panel polls git every 2s (push version = fs watcher).
 - CSP allows 'unsafe-inline' scripts (Vite dev preamble).
 - Claude's own UI colors (grey user-message bar) ignore our palette; try Claude /theme ANSI option.
-- Agents die with the app; resumed via `claude --continue` only. (next: #3)
+- Daemon must be started by hand; auto-start must avoid SIGHUP (detach from Corral).
+- Daemon dying kills its agents (it holds the PTY masters now).
+- Replay is raw bytes: full-screen TUIs can look scrambled at a new size until they redraw (tmux keeps a virtual screen instead).
+- Daemon has no auth beyond socket perms; no "kill thread" command yet.
 - Status channel is one-way and samples bursts; status files never cleaned up.
 ## fixed in v3
 - ~~nodeIntegration on~~ → preload bridge + contextIsolation.
 - ~~Fixed 100x30~~ → fit addon + pty.resize (SIGWINCH).
 - ~~"branch already exists" on restart~~ → createPen skips taken names.
+- ~~Agents die with the app~~ → corrald + replay buffer (v4).

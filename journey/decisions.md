@@ -15,3 +15,7 @@
 - 2026-11-12: status from agent hooks (user pick) over sniffing PTY output; Claude-only for now.
 - 2026-11-12: hook → Corral channel = status file + fs.watch (user pick); writes are temp+rename (user pick over file locks: no Node lock API, advisory, writer blocks on reader).
 - 2026-11-12: strip CLAUDE_CODE_CHILD_SESSION from agent env (inherited marker disables transcripts → breaks --continue).
+- 2026-11-12: separate daemon holds PTYs, app is a client (user pick).
+- 2026-11-12: channel = Unix domain socket (user pick B) over localhost WebSocket: browsers can't reach it, kernel-enforced owner-only; NDJSON framing.
+- 2026-11-12: v0 daemon started by hand (`npm run daemon`); auto-start deferred.
+- 2026-11-12: replay buffer (user idea), capped 2MB/agent, cut at newline.

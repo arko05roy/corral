@@ -1,39 +1,27 @@
+// Corral window = a CLIENT of corrald. It owns no agents: quit it, crash it, agents keep running.
 import { execFileSync } from "node:child_process";
-import * as fs from "node:fs";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
+import * as net from "node:net";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
-import * as pty from "node-pty";
-import { createPen } from "../pens.ts";
 
 const [repoArg, ...tasks] = process.argv.slice(2);
-const agentCmd = process.env.CORRAL_AGENT ?? "claude";
-const agents = new Map<number, pty.IPty>();
-let n = 0;
+const SOCK = join(homedir(), ".corral", "corrald.sock");
 
-// ── agent status via Claude hooks ──
-const STATUS_DIR = join(homedir(), ".corral", "status");
-mkdirSync(STATUS_DIR, { recursive: true });
-// write temp → rename: rename() is atomic, so Corral never reads a half-written file (stress-tested: 8/10 torn reads → 0)
-const HOOK_CMD = 'f="$HOME/.corral/status/$CORRAL_THREAD.json"; cat > "$f.$$.tmp" && mv -f "$f.$$.tmp" "$f"';
-const hook = [{ hooks: [{ type: "command", command: HOOK_CMD }] }];
-const HOOK_SETTINGS = JSON.stringify({
-	hooks: { UserPromptSubmit: hook, PreToolUse: hook, Notification: hook, Stop: hook },
-});
-// launched from inside a Claude session? don't let agents inherit its child-session marker (kills transcripts → --continue)
-const agentEnv = () => {
-	const { CLAUDE_CODE_CHILD_SESSION: _, ...env } = process.env;
-	return env;
-};
-const STATE_OF: Record<string, "working" | "waiting"> = {
-	UserPromptSubmit: "working",
-	PreToolUse: "working",
-	Notification: "waiting",
-	Stop: "waiting",
-};
+app.whenReady().then(async () => {
+	// ── connect to the daemon first; no daemon = nothing to show ──
+	let sock: net.Socket;
+	try {
+		sock = await new Promise<net.Socket>((ok, fail) => {
+			const s = net.connect(SOCK, () => ok(s));
+			s.once("error", fail);
+		});
+	} catch {
+		dialog.showErrorBox("corrald isn't running", "Start it in a terminal first:\n\n  npm run daemon");
+		return app.quit();
+	}
 
-app.whenReady().then(() => {
 	const win = new BrowserWindow({
 		width: 1300,
 		height: 850,
@@ -54,43 +42,47 @@ app.whenReady().then(() => {
 			query: process.env.CORRAL_WEBGL ? { webgl: "1" } : {},
 		});
 
-	function newThread(repo: string, task: string) {
-		const { pen, branch } = createPen(repo, task, n + 1);
-		return { ...spawnAgent(pen, [task]), repo, task, branch, pen };
-	}
-
-	function spawnAgent(pen: string, args: string[]) {
-		const id = ++n;
-		const isClaude = basename(agentCmd) === "claude";
-		const term = pty.spawn(agentCmd, isClaude ? ["--settings", HOOK_SETTINGS, ...args] : args, {
-			cols: 100,
-			rows: 30,
-			cwd: pen,
-			// hooks are claude's children → they inherit this and know which thread they belong to
-			env: { ...agentEnv(), CORRAL_THREAD: String(id) } as Record<string, string>,
+	// ── the wire: one JSON per line, both ways ──
+	const write = (msg: object) => sock.write(JSON.stringify(msg) + "\n");
+	const pending = new Map<number, (data: any) => void>();
+	let reqs = 0;
+	// request/response on top of a stream: tag with reqId, resolve when the matching reply arrives
+	const rpc = (msg: object) =>
+		new Promise<any>((ok) => {
+			const reqId = ++reqs;
+			pending.set(reqId, ok);
+			write({ ...msg, reqId });
 		});
-		term.onData((text) => win.webContents.send("out", { id, text }));
-		term.onExit(({ exitCode }) => {
-			win.webContents.send("out", { id, text: `\r\n[agent exited: ${exitCode}]\r\n` });
-			win.webContents.send("exited", { id });
-			agents.delete(id);
-		});
-		agents.set(id, term);
-		return { id };
-	}
 
-	// v0 status channel: hook writes its event JSON to a file, we watch the folder
-	fs.watch(STATUS_DIR, (_event, file) => {
-		const id = Number(file?.replace(/\.json$/, ""));
-		if (!id || !agents.has(id)) return;
-		try {
-			const ev = JSON.parse(readFileSync(join(STATUS_DIR, file!), "utf8")).hook_event_name;
-			const state = STATE_OF[ev];
-			if (process.env.CORRAL_DEBUG) console.log(`[status] thread ${id}: ${ev} -> ${state}`);
-			if (state) win.webContents.send("status", { id, state });
-		} catch {} // half-written file? ignore for now
+	let buf = "";
+	sock.setEncoding("utf8");
+	sock.on("data", (chunk: string) => {
+		buf += chunk;
+		let nl: number;
+		while ((nl = buf.indexOf("\n")) >= 0) {
+			const msg = JSON.parse(buf.slice(0, nl));
+			buf = buf.slice(nl + 1);
+			if (msg.type === "reply") {
+				pending.get(msg.reqId)?.(msg);
+				pending.delete(msg.reqId);
+			} else win.webContents.send(msg.type, msg); // out / exited / status → UI
+		}
+	});
+	sock.on("close", () => {
+		if (!win.isDestroyed()) dialog.showErrorBox("Lost corrald", "The daemon went away. Agents it owned are gone.");
 	});
 
+	// ── UI → daemon ──
+	ipcMain.handle("new-thread", async (_e, { repo, task }) => {
+		const r = await rpc({ type: "spawn", repo, task });
+		return r.error ? { error: r.error } : r.thread;
+	});
+	ipcMain.handle("resume", async (_e, meta) => (await rpc({ type: "resume", meta })) as { id: number });
+	ipcMain.on("in", (_e, { id, text }) => write({ type: "in", id, text }));
+	// daemon resizes the PTY; the kernel then sends SIGWINCH to the agent
+	ipcMain.on("resize", (_e, { id, cols, rows }) => write({ type: "resize", id, cols, rows }));
+
+	// ── local-only stuff: reading git on disk needs no agent ──
 	const git = (cwd: string, ...args: string[]) =>
 		execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer: 64 << 20 });
 
@@ -106,7 +98,6 @@ app.whenReady().then(() => {
 			.filter((p) => p.pen.startsWith(pensDir) && p.branch.startsWith("corral/"))
 			.map((p) => ({ ...p, repo, task: p.branch.replace(/^corral\//, "").replace(/-\d+$/, "").replace(/-/g, " ") }));
 	});
-	ipcMain.handle("resume", (_e, pen: string) => spawnAgent(pen, agentCmd === "claude" ? ["--continue"] : []));
 
 	// files panel: what changed + the whole tree
 	ipcMain.handle("files", (_e, pen: string) => {
@@ -122,32 +113,27 @@ app.whenReady().then(() => {
 		}
 	});
 
-	// UI → main: requests that need an answer
 	ipcMain.handle("pick-repo", async () => {
 		const r = await dialog.showOpenDialog(win, { properties: ["openDirectory"] });
 		return r.canceled ? null : r.filePaths[0];
 	});
-	ipcMain.handle("new-thread", (_e, { repo, task }) => {
-		try {
-			return newThread(repo, task);
-		} catch (err) {
-			return { error: String((err as Error).message) };
+
+	win.webContents.on("did-finish-load", async () => {
+		// RE-ATTACH: whatever the daemon is running shows up again
+		const { threads } = await rpc({ type: "list" });
+		for (const t of threads) win.webContents.send("thread", t);
+
+		// optional CLI preload: `npm run app <repo> "task" ...`
+		if (repoArg) {
+			const repo = resolve(repoArg);
+			win.webContents.send("workspace", repo);
+			for (const task of tasks) {
+				const r = await rpc({ type: "spawn", repo, task });
+				if (!r.error) win.webContents.send("thread", r.thread);
+			}
 		}
-	});
-	ipcMain.on("in", (_e, { id, text }) => agents.get(id)?.write(text));
-	// set the PTY's window size; the kernel then sends SIGWINCH to the agent
-	ipcMain.on("resize", (_e, { id, cols, rows }) => {
-		if (cols > 0 && rows > 0) agents.get(id)?.resize(cols, rows);
-	});
 
-	// optional CLI preload: `npm run app <repo> "task" ...`
-	win.webContents.on("did-finish-load", () => {
-		if (!repoArg) return;
-		const repo = resolve(repoArg);
-		win.webContents.send("workspace", repo);
-		for (const task of tasks) win.webContents.send("thread", newThread(repo, task));
-
-		// dev hook: CORRAL_SHOT=out.png → screenshot own window after 3s, then quit
+		// dev hook: CORRAL_SHOT=out.png → screenshot own window after a delay, then quit
 		const shot = process.env.CORRAL_SHOT;
 		if (shot && process.env.CORRAL_SHOT_RESIZE) setTimeout(() => win.setSize(1000, 700), 1500); // mid-run resize → proves SIGWINCH path
 		if (shot)

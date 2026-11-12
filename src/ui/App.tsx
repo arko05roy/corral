@@ -45,14 +45,14 @@ export function App() {
 
 	const addThread = (t: Thread) => {
 		addWorkspace(t.repo);
-		upsert([{ ...t, alive: true, state: "working" }]); // new thread starts on its task
+		upsert([{ ...t, alive: true, state: t.state ?? "working" }]); // daemon tells us the state on re-attach
 		setActive(t.pen);
 	};
 
 	async function select(t: Thread) {
 		setActive(t.pen);
 		if (t.id === null) {
-			const { id } = await window.corral.resume(t.pen);
+			const { id } = await window.corral.resume({ repo: t.repo, task: t.task, branch: t.branch, pen: t.pen });
 			upsert([{ ...t, id, alive: true, state: "waiting" }]); // resumed = sitting at the prompt
 		}
 	}

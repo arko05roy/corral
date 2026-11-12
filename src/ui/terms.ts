@@ -78,7 +78,7 @@ declare global {
 			pickRepo(): Promise<string | null>;
 			newThread(repo: string, task: string): Promise<Thread | { error: string }>;
 			listPens(repo: string): Promise<Omit<Thread, "id">[]>;
-			resume(pen: string): Promise<{ id: number }>;
+			resume(meta: { repo: string; task: string; branch: string; pen: string }): Promise<{ id: number }>;
 			files(pen: string): Promise<{ changed: { status: string; path: string }[]; all: string[]; error?: string }>;
 			send(id: number, text: string): void;
 			resize(id: number, cols: number, rows: number): void;

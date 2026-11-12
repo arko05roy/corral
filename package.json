@@ -9,7 +9,8 @@
     "corral": "node src/cli.ts",
     "app": "vite build && electron src/app/main.ts",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper",
-    "dev": "vite"
+    "dev": "vite",
+    "daemon": "node src/daemon.ts"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

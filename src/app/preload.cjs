@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld("corral", {
 	pickRepo: () => ipcRenderer.invoke("pick-repo"),
 	newThread: (repo, task) => ipcRenderer.invoke("new-thread", { repo, task }),
 	listPens: (repo) => ipcRenderer.invoke("list-pens", repo),
-	resume: (pen) => ipcRenderer.invoke("resume", pen),
+	resume: (meta) => ipcRenderer.invoke("resume", meta),
 	files: (pen) => ipcRenderer.invoke("files", pen),
 	send: (id, text) => ipcRenderer.send("in", { id, text }),
 	resize: (id, cols, rows) => ipcRenderer.send("resize", { id, cols, rows }),
