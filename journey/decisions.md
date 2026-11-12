@@ -4,3 +4,11 @@
 - 2026-11-12: UI = Electron (user pick over local web page), same shape as Paradev.
 - 2026-11-12: node-pty for PTYs; our own postinstall chmods spawn-helper (1.1.0 ships it non-executable; its install scripts don't fix it).
 - 2026-11-12: xterm.js for the panel emulator (user pick over hand-rolling). Input box removed: raw keystrokes go straight to the PTY.
+- 2026-11-12: workspace = repo, thread = pen; one terminal visible at a time.
+- 2026-11-12: React (user pick) to match Paradev and ease UI growth; vanilla was fine at v2 size.
+- 2026-11-12: theme from user refs: cobalt etching on cream + lighthouse amber; amber reserved for "alive".
+- 2026-11-12: copy Paradev's layout (user pick) after first theme pass felt weak.
+- 2026-11-12: no JSON thread store: git worktree list is the source of truth for pens.
+- 2026-11-12: old pen click = `claude --continue`; files panel = changed + tree.
+- 2026-11-12: branch collisions: bump the number until free (readable names over timestamps).
+- 2026-11-12: mascot/WebGL parked (user call).
