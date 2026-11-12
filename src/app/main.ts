@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import * as fs from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import * as pty from "node-pty";
 import { createPen } from "../pens.ts";
@@ -10,6 +11,27 @@ const [repoArg, ...tasks] = process.argv.slice(2);
 const agentCmd = process.env.CORRAL_AGENT ?? "claude";
 const agents = new Map<number, pty.IPty>();
 let n = 0;
+
+// ── agent status via Claude hooks ──
+const STATUS_DIR = join(homedir(), ".corral", "status");
+mkdirSync(STATUS_DIR, { recursive: true });
+// write temp → rename: rename() is atomic, so Corral never reads a half-written file (stress-tested: 8/10 torn reads → 0)
+const HOOK_CMD = 'f="$HOME/.corral/status/$CORRAL_THREAD.json"; cat > "$f.$$.tmp" && mv -f "$f.$$.tmp" "$f"';
+const hook = [{ hooks: [{ type: "command", command: HOOK_CMD }] }];
+const HOOK_SETTINGS = JSON.stringify({
+	hooks: { UserPromptSubmit: hook, PreToolUse: hook, Notification: hook, Stop: hook },
+});
+// launched from inside a Claude session? don't let agents inherit its child-session marker (kills transcripts → --continue)
+const agentEnv = () => {
+	const { CLAUDE_CODE_CHILD_SESSION: _, ...env } = process.env;
+	return env;
+};
+const STATE_OF: Record<string, "working" | "waiting"> = {
+	UserPromptSubmit: "working",
+	PreToolUse: "working",
+	Notification: "waiting",
+	Stop: "waiting",
+};
 
 app.whenReady().then(() => {
 	const win = new BrowserWindow({
@@ -39,11 +61,13 @@ app.whenReady().then(() => {
 
 	function spawnAgent(pen: string, args: string[]) {
 		const id = ++n;
-		const term = pty.spawn(agentCmd, args, {
+		const isClaude = basename(agentCmd) === "claude";
+		const term = pty.spawn(agentCmd, isClaude ? ["--settings", HOOK_SETTINGS, ...args] : args, {
 			cols: 100,
 			rows: 30,
 			cwd: pen,
-			env: process.env as Record<string, string>,
+			// hooks are claude's children → they inherit this and know which thread they belong to
+			env: { ...agentEnv(), CORRAL_THREAD: String(id) } as Record<string, string>,
 		});
 		term.onData((text) => win.webContents.send("out", { id, text }));
 		term.onExit(({ exitCode }) => {
@@ -54,6 +78,18 @@ app.whenReady().then(() => {
 		agents.set(id, term);
 		return { id };
 	}
+
+	// v0 status channel: hook writes its event JSON to a file, we watch the folder
+	fs.watch(STATUS_DIR, (_event, file) => {
+		const id = Number(file?.replace(/\.json$/, ""));
+		if (!id || !agents.has(id)) return;
+		try {
+			const ev = JSON.parse(readFileSync(join(STATUS_DIR, file!), "utf8")).hook_event_name;
+			const state = STATE_OF[ev];
+			if (process.env.CORRAL_DEBUG) console.log(`[status] thread ${id}: ${ev} -> ${state}`);
+			if (state) win.webContents.send("status", { id, state });
+		} catch {} // half-written file? ignore for now
+	});
 
 	const git = (cwd: string, ...args: string[]) =>
 		execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer: 64 << 20 });
@@ -118,7 +154,7 @@ app.whenReady().then(() => {
 			setTimeout(async () => {
 				writeFileSync(shot, (await win.webContents.capturePage()).toPNG());
 				app.quit();
-			}, 3000);
+			}, Number(process.env.CORRAL_SHOT_DELAY ?? 3000));
 	});
 });
 

@@ -266,3 +266,15 @@ button.chip:hover { background: var(--ink-14); }
 .quiet { margin: 14px; color: var(--faded); }
 
 @media (prefers-reduced-motion: reduce) { .alive .lamp { animation: none; } }
+
+/* ── agent status (Claude hooks) ──────────────────────
+   working  = small lamp, beam turning (default .alive pulse)
+   waiting  = lamp burning steady with a wide halo: go look at it */
+.alive.waiting .lamp {
+	width: 9px;
+	height: 9px;
+	animation: none;
+	background: var(--amber);
+	box-shadow: 0 0 0 3px #f2a93b40, 0 0 12px 3px #f2a93bcc;
+}
+.alive.waiting .name { font-weight: 600; }

@@ -12,3 +12,6 @@
 - 2026-11-12: old pen click = `claude --continue`; files panel = changed + tree.
 - 2026-11-12: branch collisions: bump the number until free (readable names over timestamps).
 - 2026-11-12: mascot/WebGL parked (user call).
+- 2026-11-12: status from agent hooks (user pick) over sniffing PTY output; Claude-only for now.
+- 2026-11-12: hook → Corral channel = status file + fs.watch (user pick); writes are temp+rename (user pick over file locks: no Node lock API, advisory, writer blocks on reader).
+- 2026-11-12: strip CLAUDE_CODE_CHILD_SESSION from agent env (inherited marker disables transcripts → breaks --continue).

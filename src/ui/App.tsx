@@ -45,7 +45,7 @@ export function App() {
 
 	const addThread = (t: Thread) => {
 		addWorkspace(t.repo);
-		upsert([{ ...t, alive: true }]);
+		upsert([{ ...t, alive: true, state: "working" }]); // new thread starts on its task
 		setActive(t.pen);
 	};
 
@@ -53,7 +53,7 @@ export function App() {
 		setActive(t.pen);
 		if (t.id === null) {
 			const { id } = await window.corral.resume(t.pen);
-			upsert([{ ...t, id, alive: true }]);
+			upsert([{ ...t, id, alive: true, state: "waiting" }]); // resumed = sitting at the prompt
 		}
 	}
 
@@ -70,6 +70,9 @@ export function App() {
 			window.corral.on("workspace", addWorkspace),
 			window.corral.on("thread", addThread),
 			window.corral.on("out", ({ id, text }) => getTerm(id).write(text)),
+			window.corral.on("status", ({ id, state }) =>
+				setThreads((ts) => ts.map((t) => (t.id === id ? { ...t, state } : t))),
+			),
 			window.corral.on("exited", ({ id }) =>
 				setThreads((ts) => ts.map((t) => (t.id === id ? { ...t, alive: false } : t))),
 			),
@@ -188,11 +191,11 @@ function RepoGroup(props: {
 					{props.threads.map((t) => (
 						<li key={t.pen}>
 							<button
-								className={`thread ${t.pen === props.active ? "active" : ""} ${t.alive ? "alive" : t.id === null ? "dormant" : "dead"}`}
+								className={`thread ${t.pen === props.active ? "active" : ""} ${t.alive ? `alive ${t.state ?? ""}` : t.id === null ? "dormant" : "dead"}`}
 								onClick={() => props.onSelect(t)}
 								title={t.id === null ? `${t.branch} · click to resume` : t.branch}
 							>
-								<span className="lamp" aria-label={t.alive ? "agent running" : "agent not running"} />
+								<span className="lamp" aria-label={!t.alive ? "agent not running" : t.state === "waiting" ? "needs you" : "working"} />
 								<span className="name">{t.task}</span>
 							</button>
 						</li>

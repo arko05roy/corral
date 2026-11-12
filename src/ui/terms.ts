@@ -88,4 +88,12 @@ declare global {
 }
 
 // id = live agent session (null = old pen, nothing running yet). pen = its folder, the stable key.
-export type Thread = { id: number | null; repo: string; task: string; branch: string; pen: string; alive?: boolean };
+export type Thread = {
+	id: number | null;
+	repo: string;
+	task: string;
+	branch: string;
+	pen: string;
+	alive?: boolean;
+	state?: "working" | "waiting"; // from Claude hooks
+};

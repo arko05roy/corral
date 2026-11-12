@@ -8,7 +8,8 @@
 - Files panel polls git every 2s (push version = fs watcher).
 - CSP allows 'unsafe-inline' scripts (Vite dev preamble).
 - Claude's own UI colors (grey user-message bar) ignore our palette; try Claude /theme ANSI option.
-- Agents die with the app; resumed via `claude --continue` only.
+- Agents die with the app; resumed via `claude --continue` only. (next: #3)
+- Status channel is one-way and samples bursts; status files never cleaned up.
 ## fixed in v3
 - ~~nodeIntegration on~~ → preload bridge + contextIsolation.
 - ~~Fixed 100x30~~ → fit addon + pty.resize (SIGWINCH).
