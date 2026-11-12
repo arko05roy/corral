@@ -25,7 +25,7 @@ app.whenReady().then(async () => {
 	const win = new BrowserWindow({
 		width: 1300,
 		height: 850,
-		backgroundColor: "#EFE6D2",
+		backgroundColor: "#121212",
 		titleBarStyle: "hiddenInset",
 		trafficLightPosition: { x: 16, y: 16 },
 		webPreferences: {

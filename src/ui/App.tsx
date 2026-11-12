@@ -117,7 +117,6 @@ export function App() {
 
 				<footer className="side-foot">
 					<span className="wordmark">Corral</span>
-					<Hills className="foot-hills" />
 				</footer>
 			</aside>
 
@@ -244,8 +243,10 @@ function Home(props: {
 		<div className="home">
 			<div className="drag top" />
 			<div className="hero">
-				<Hills className="hero-hills" />
-				<h1>What's the next job?</h1>
+				<div className="hero-mark">
+					<TerminalIcon size={26} strokeWidth={1.5} />
+				</div>
+				<h1>What's the next task?</h1>
 			</div>
 
 			<div className="composer-wrap">
@@ -419,27 +420,3 @@ function Files({ pen }: { pen: string }) {
 	);
 }
 
-// Engraved hills: hatched ridge lines, straight out of the prairie etching.
-function Hills({ className }: { className?: string }) {
-	const lines = Array.from({ length: 22 }, (_, i) => i);
-	return (
-		<svg className={className} viewBox="0 0 240 70" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
-			<defs>
-				<clipPath id={`hills-${className}`}>
-					<path d="M0 46 Q30 30 58 40 T120 36 Q150 22 172 18 Q196 14 214 30 T240 34 V70 H0Z" />
-				</clipPath>
-			</defs>
-			<g clipPath={`url(#hills-${className})`} stroke="currentColor" strokeWidth="0.8" opacity="0.7" fill="none">
-				{lines.map((i) => (
-					<path key={i} d={`M-10 ${16 + i * 2.6} Q60 ${12 + i * 2.6} 130 ${18 + i * 2.6} T260 ${14 + i * 2.6}`} />
-				))}
-			</g>
-			<path
-				d="M0 46 Q30 30 58 40 T120 36 Q150 22 172 18 Q196 14 214 30 T240 34"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="1.3"
-			/>
-		</svg>
-	);
-}

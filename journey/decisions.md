@@ -19,3 +19,4 @@
 - 2026-11-12: channel = Unix domain socket (user pick B) over localhost WebSocket: browsers can't reach it, kernel-enforced owner-only; NDJSON framing.
 - 2026-11-12: v0 daemon started by hand (`npm run daemon`); auto-start deferred.
 - 2026-11-12: replay buffer (user idea), capped 2MB/agent, cut at newline.
+- 2026-11-12: UI switched to dark-only neutral grayscale matching Paradev (user: hated cobalt/cream theme). System UI font + SF Mono; amber kept as the single 'needs you' color.

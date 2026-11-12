@@ -6,15 +6,15 @@ import { Terminal } from "@xterm/xterm";
 const terms = new Map<number, Terminal>();
 
 const theme = {
-	background: "#14286E00",
-	foreground: "#EFE6D2",
-	cursor: "#F2A93B",
-	cursorAccent: "#14286E",
-	selectionBackground: "#EFE6D244",
-	black: "#0B1640", red: "#E8806B", green: "#A9C98A", yellow: "#F2A93B",
-	blue: "#8FA6F0", magenta: "#C9A2E0", cyan: "#8CCBD6", white: "#EFE6D2",
-	brightBlack: "#7D8AC0", brightRed: "#F2A08E", brightGreen: "#C4DDA8", brightYellow: "#F7C878",
-	brightBlue: "#B4C4F7", brightMagenta: "#DCC0EC", brightCyan: "#B0DDE5", brightWhite: "#FFFFFF",
+	background: "#12121200", // transparent: the panel behind it paints #121212
+	foreground: "#e5e5e5",
+	cursor: "#e5e5e5",
+	cursorAccent: "#121212",
+	selectionBackground: "#ffffff30",
+	black: "#1c1c1c", red: "#f07178", green: "#a6d189", yellow: "#e5c07b",
+	blue: "#82aaff", magenta: "#c792ea", cyan: "#89ddff", white: "#d4d4d4",
+	brightBlack: "#6b6b6b", brightRed: "#ff8b92", brightGreen: "#c3e88d", brightYellow: "#ffcb6b",
+	brightBlue: "#9cc4ff", brightMagenta: "#ddb0f6", brightCyan: "#a3f7ff", brightWhite: "#fafafa",
 };
 
 export function getTerm(id: number) {
@@ -25,7 +25,7 @@ export function getTerm(id: number) {
 			rows: 30,
 			theme,
 			allowTransparency: true,
-			fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
+			fontFamily: '"SF Mono", ui-monospace, Menlo, monospace',
 			fontSize: 13,
 			lineHeight: 1.2,
 		});
@@ -49,7 +49,7 @@ export async function openTerm(id: number, el: HTMLElement) {
 	if (t.element) return;
 	t.open(el);
 	// GPU renderer bakes glyphs into a texture once: font must be loaded first or it bakes the wrong metrics
-	await document.fonts.load('400 13px "IBM Plex Mono"').catch(() => {});
+	await document.fonts.load('400 13px "SF Mono"').catch(() => {});
 	// and wait a frame: loading WebGL right after open() races xterm's own post-open measuring
 	// (same fix as Paradev: terminal-addons.ts loadAddons())
 	await new Promise(requestAnimationFrame);
