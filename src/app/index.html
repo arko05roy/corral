@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>corral</title>
+<link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
+<script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+<style>
+	body { margin: 0; display: flex; height: 100vh; font: 13px ui-monospace, monospace; background: #111; color: #ddd; }
+	.pen { flex: 1; display: flex; flex-direction: column; border-right: 1px solid #333; min-width: 0; }
+	.pen h3 { margin: 0; padding: 6px 8px; background: #222; font-size: 12px; }
+	.pen .screen { flex: 1; padding: 4px; }
+</style>
+</head>
+<body>
+<script>
+	const { ipcRenderer } = require("electron");
+	const terms = {};
+
+	ipcRenderer.on("pen", (_e, { id, task, branch }) => {
+		const el = document.createElement("div");
+		el.className = "pen";
+		el.innerHTML = `<h3></h3><div class="screen"></div>`;
+		el.querySelector("h3").textContent = `${task}  (${branch})`;
+		document.body.appendChild(el);
+
+		const term = new Terminal({ cols: 100, rows: 30 });
+		term.open(el.querySelector(".screen"));
+		term.onData((text) => ipcRenderer.send("in", { id, text }));
+		terms[id] = term;
+	});
+
+	ipcRenderer.on("out", (_e, { id, text }) => terms[id].write(text));
+</script>
+</body>
+</html>

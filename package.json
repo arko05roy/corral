@@ -2,6 +2,19 @@
   "name": "corral",
   "version": "0.0.0",
   "type": "module",
-  "bin": { "corral": "src/cli.ts" },
-  "scripts": { "corral": "node src/cli.ts" }
+  "bin": {
+    "corral": "src/cli.ts"
+  },
+  "scripts": {
+    "corral": "node src/cli.ts",
+    "app": "electron src/app/main.ts",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper"
+  },
+  "devDependencies": {
+    "electron": "^45.3.1"
+  },
+  "dependencies": {
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0"
+  }
 }
