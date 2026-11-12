@@ -1,0 +1,7 @@
+{
+  "name": "corral",
+  "version": "0.0.0",
+  "type": "module",
+  "bin": { "corral": "src/cli.ts" },
+  "scripts": { "corral": "node src/cli.ts" }
+}
