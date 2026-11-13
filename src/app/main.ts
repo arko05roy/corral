@@ -1,6 +1,6 @@
 // Corral window = a CLIENT of corrald. It owns no agents: quit it, crash it, agents keep running.
-import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import * as net from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -11,15 +11,36 @@ const SOCK = join(homedir(), ".corral", "corrald.sock");
 
 app.whenReady().then(async () => {
 	// ── connect to the daemon first; no daemon = nothing to show ──
-	let sock: net.Socket;
-	try {
-		sock = await new Promise<net.Socket>((ok, fail) => {
+	const connect = () =>
+		new Promise<net.Socket>((ok, fail) => {
 			const s = net.connect(SOCK, () => ok(s));
 			s.once("error", fail);
 		});
+	let sock: net.Socket;
+	try {
+		sock = await connect();
 	} catch {
-		dialog.showErrorBox("corrald isn't running", "Start it in a terminal first:\n\n  npm run daemon");
-		return app.quit();
+		// AUTO-START: no daemon → launch one. detached = setsid(): new session, no controlling
+		// terminal, so neither closing the terminal nor quitting Corral can SIGHUP it.
+		mkdirSync(join(homedir(), ".corral"), { recursive: true });
+		const log = openSync(join(homedir(), ".corral", "corrald.log"), "a");
+		const daemon = resolve(import.meta.dirname, "..", "daemon.ts");
+		spawn(process.env.CORRAL_NODE ?? "node", [daemon], {
+			detached: true,
+			stdio: ["ignore", log, log],
+			env: process.env,
+		}).unref(); // don't keep Corral alive waiting on it
+		closeSync(log);
+		let s: net.Socket | undefined;
+		for (let i = 0; i < 50 && !s; i++) {
+			await new Promise((r) => setTimeout(r, 100));
+			s = await connect().catch(() => undefined);
+		}
+		if (!s) {
+			dialog.showErrorBox("corrald won't start", "See ~/.corral/corrald.log, or run it by hand:\n\n  npm run daemon");
+			return app.quit();
+		}
+		sock = s;
 	}
 
 	const win = new BrowserWindow({

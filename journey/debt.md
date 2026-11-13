@@ -8,7 +8,7 @@
 - Files panel polls git every 2s (push version = fs watcher).
 - CSP allows 'unsafe-inline' scripts (Vite dev preamble).
 - Claude's own UI colors (grey user-message bar) ignore our palette; try Claude /theme ANSI option.
-- Daemon must be started by hand; auto-start must avoid SIGHUP (detach from Corral).
+- Daemon auto-started by app (detached/setsid, log ~/.corral/corrald.log); uses `node` from PATH (CORRAL_NODE overrides) — breaks if launched from Finder without PATH.
 - Daemon dying kills its agents (it holds the PTY masters now).
 - Replay is raw bytes: full-screen TUIs can look scrambled at a new size until they redraw (tmux keeps a virtual screen instead).
 - Daemon has no auth beyond socket perms; no "kill thread" command yet.

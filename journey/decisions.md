@@ -20,3 +20,4 @@
 - 2026-11-12: v0 daemon started by hand (`npm run daemon`); auto-start deferred.
 - 2026-11-12: replay buffer (user idea), capped 2MB/agent, cut at newline.
 - 2026-11-12: UI switched to dark-only neutral grayscale matching Paradev (user: hated cobalt/cream theme). System UI font + SF Mono; amber kept as the single 'needs you' color.
+- 2026-11-13: auto-start corrald via spawn detached:true (setsid) + unref, retry connect 5s; stdio to ~/.corral/corrald.log.
