@@ -14,7 +14,7 @@ import {
 	Terminal as TerminalIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { fitTerm, getTerm, openTerm, type Thread } from "./terms";
+import { bornAtSize, fitTerm, getTerm, lastSize, openTerm, type Thread } from "./terms";
 
 const repoName = (p: string) => p.split("/").pop() ?? p;
 
@@ -54,7 +54,9 @@ export function App() {
 		setActive(t.pen);
 		if (!t.alive) {
 			// dormant (never ran this session) or dead (exited/killed): either way, wake it with --continue
-			const { id } = await window.corral.resume({ repo: t.repo, task: t.task, branch: t.branch, pen: t.pen });
+			const size = lastSize;
+			const { id } = await window.corral.resume({ repo: t.repo, task: t.task, branch: t.branch, pen: t.pen }, size);
+			if (size) bornAtSize.add(id);
 			upsert([{ ...t, id, alive: true, state: "waiting" }]); // resumed = sitting at the prompt
 		}
 	}
@@ -159,7 +161,15 @@ export function App() {
 										<Screen key={t.id} id={t.id!} shown={t.pen === active} />
 									))}
 							</div>
-							{filesOpen && <Files pen={current.pen} />}
+							{filesOpen && (
+								<Files
+									thread={current}
+									onDeleted={() => {
+										setThreads((ts) => ts.filter((t) => t.pen !== current.pen));
+										setActive(null); // back to composer home: the pen no longer exists
+									}}
+								/>
+							)}
 						</div>
 					</>
 				) : (
@@ -243,7 +253,9 @@ function Home(props: {
 		if (!text || busy) return;
 		if (!props.repo) return setError("Add a repo first, then start the thread.");
 		setBusy(true);
-		const res = await window.corral.newThread(props.repo, text);
+		const size = lastSize; // born at the real panel size (Paradev: spawn with the measured xterm cols/rows)
+		const res = await window.corral.newThread(props.repo, text, size);
+		if (size && !("error" in res) && res.id !== null) bornAtSize.add(res.id);
 		setBusy(false);
 		if ("error" in res) return setError(res.error.split("\n")[0]);
 		setPrompt("");
@@ -381,9 +393,61 @@ function TreeNode({ name, node, depth }: { name: string; node: Tree; depth: numb
 	);
 }
 
-function Files({ pen }: { pen: string }) {
+function Files({ thread, onDeleted }: { thread: Thread; onDeleted: () => void }) {
+	const pen = thread.pen;
 	const [data, setData] = useState<Awaited<ReturnType<typeof window.corral.files>> | null>(null);
 	const [tab, setTab] = useState<"changes" | "files">("changes");
+	// pen actions. mode: which box is open. merge/pr = review changes + edit commit message, then confirm
+	const [mode, setMode] = useState<null | "merge" | "pr" | "delete">(null);
+	const [msg, setMsg] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [err, setErr] = useState<string | null>(null);
+	const [done, setDone] = useState<{ text: string; url?: string } | null>(null);
+	const [warn, setWarn] = useState<string | null>(null); // delete: unmerged/dirty → needs a second click
+	useEffect(() => {
+		setMode(null);
+		setErr(null);
+		setDone(null);
+		setWarn(null);
+	}, [pen]);
+
+	const id = thread.alive ? thread.id : null;
+	const open = (m: "merge" | "pr") => {
+		setTab("changes");
+		setMsg(`corral: ${thread.task}`);
+		setErr(null);
+		setDone(null);
+		setMode(m);
+	};
+	async function run<T extends { error?: string }>(p: Promise<T>) {
+		setBusy(true);
+		setErr(null);
+		const r = await p;
+		setBusy(false);
+		if (r.error) setErr(r.error);
+		return r;
+	}
+	async function confirm() {
+		const message = msg.trim() || `corral: ${thread.task}`;
+		if (mode === "merge") {
+			const r = await run(window.corral.merge({ id, repo: thread.repo, pen, branch: thread.branch, message }));
+			if (r.ok) setDone({ text: `Merged ${thread.branch} into your current branch.` });
+		} else if (mode === "pr") {
+			const r = await run(window.corral.openPr({ pen, branch: thread.branch, message }));
+			if (r.ok) setDone({ text: "PR opened:", url: r.url });
+		}
+		setMode(null);
+	}
+	async function del(force: boolean) {
+		setMode("delete");
+		const r = await run(window.corral.deletePen({ id, repo: thread.repo, pen, branch: thread.branch, force }));
+		if (r.needsForce) {
+			setWarn(
+				[r.dirty && "uncommitted changes", !r.merged && "work not merged into your current branch"].filter(Boolean).join(" and ") +
+					". Deleting throws it away for good.",
+			);
+		} else if (r.ok) onDeleted();
+	}
 
 	useEffect(() => {
 		let live = true;
@@ -428,6 +492,56 @@ function Files({ pen }: { pen: string }) {
 					))}
 				</ul>
 			)}
+			<div className="merge">
+				{done && (
+					<p className="quiet">
+						{done.text}{" "}
+						{done.url && (
+							<a href={done.url} target="_blank" rel="noreferrer">
+								{done.url.replace(/^https:\/\/github.com\//, "")}
+							</a>
+						)}
+					</p>
+				)}
+				{err && <p className="merge-err">{err}</p>}
+				{mode === "merge" || mode === "pr" ? (
+					<>
+						<p className="quiet">
+							Commits {n || "no"} change{n === 1 ? "" : "s"} above, then{" "}
+							{mode === "merge" ? (
+								<>merges <b>{thread.branch}</b> into your repo's current branch. The pen is kept.</>
+							) : (
+								<>pushes <b>{thread.branch}</b> and opens a PR on GitHub.</>
+							)}
+						</p>
+						<textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={2} disabled={busy} />
+						<div className="merge-row">
+							<button onClick={() => setMode(null)} disabled={busy}>Cancel</button>
+							<button className="merge-btn" onClick={confirm} disabled={busy}>
+								{busy ? "Working…" : mode === "merge" ? "Merge" : "Open PR"}
+							</button>
+						</div>
+					</>
+				) : mode === "delete" && warn ? (
+					<>
+						<p className="merge-err">This pen has {warn}</p>
+						<div className="merge-row">
+							<button onClick={() => { setMode(null); setWarn(null); }} disabled={busy}>Cancel</button>
+							<button className="merge-btn danger" onClick={() => del(true)} disabled={busy}>
+								{busy ? "Deleting…" : "Delete anyway"}
+							</button>
+						</div>
+					</>
+				) : (
+					<div className="merge-row">
+						<button className="merge-btn" onClick={() => open("merge")} disabled={busy}>Merge</button>
+						<button className="merge-btn" onClick={() => open("pr")} disabled={busy}>Open PR</button>
+						<button className="merge-btn danger" onClick={() => del(false)} disabled={busy}>
+							{busy ? "…" : "Delete"}
+						</button>
+					</div>
+				)}
+			</div>
 		</aside>
 	);
 }

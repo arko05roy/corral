@@ -253,3 +253,14 @@ button.chip:hover { color: var(--fg); background: #2e2e2e; }
 .quiet { margin: 14px; color: var(--fg-faint); }
 
 @media (prefers-reduced-motion: reduce) { .alive .lamp { animation: none; } }
+/* merge & delete: pinned to the bottom of the files panel */
+.files .merge { margin-top: auto; padding: 10px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+.files .merge .quiet { margin: 0; font-size: 12px; }
+.files .merge textarea { width: 100%; resize: vertical; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg, transparent); color: var(--fg); font: inherit; font-size: 12px; }
+.merge-row { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.merge-row button { height: 26px; padding: 0 10px; border-radius: 6px; color: var(--fg-2); }
+.merge-btn { height: 28px; padding: 0 12px; border-radius: 6px; background: var(--muted); color: var(--fg); font-weight: 500; font-size: 12px; }
+.merge-btn:hover:not(:disabled) { filter: brightness(1.15); }
+.merge-err { margin: 0; font-size: 12px; color: #e5484d; word-break: break-word; }
+.merge-btn.danger { color: #e5484d; }
+.files .merge a { color: var(--fg); text-decoration: underline; word-break: break-all; }

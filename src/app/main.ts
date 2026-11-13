@@ -1,10 +1,10 @@
 // Corral window = a CLIENT of corrald. It owns no agents: quit it, crash it, agents keep running.
 import { execFileSync, spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, renameSync, writeFileSync } from "node:fs";
 import * as net from "node:net";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { dirname, join, resolve } from "node:path";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 
 const [repoArg, ...tasks] = process.argv.slice(2);
 const SOCK = join(homedir(), ".corral", "corrald.sock");
@@ -57,6 +57,11 @@ app.whenReady().then(async () => {
 		},
 	});
 	const devUrl = process.env.CORRAL_DEV_URL;
+	// links (e.g. a PR url) open in the real browser. never a new electron window: it would inherit our preload bridge
+	win.webContents.setWindowOpenHandler(({ url }) => {
+		if (url.startsWith("https://")) shell.openExternal(url);
+		return { action: "deny" };
+	});
 	if (devUrl) win.loadURL(devUrl);
 	else
 		win.loadFile(resolve(import.meta.dirname, "../../dist/ui/index.html"), {
@@ -66,6 +71,7 @@ app.whenReady().then(async () => {
 	// ── the wire: one JSON per line, both ways ──
 	const write = (msg: object) => sock.write(JSON.stringify(msg) + "\n");
 	const pending = new Map<number, (data: any) => void>();
+	const exitWaiters = new Map<number, () => void>(); // agent id → resolve when the daemon says it exited
 	let reqs = 0;
 	// request/response on top of a stream: tag with reqId, resolve when the matching reply arrives
 	const rpc = (msg: object) =>
@@ -86,7 +92,10 @@ app.whenReady().then(async () => {
 			if (msg.type === "reply") {
 				pending.get(msg.reqId)?.(msg);
 				pending.delete(msg.reqId);
-			} else win.webContents.send(msg.type, msg); // out / exited / status → UI
+			} else {
+				if (msg.type === "exited") exitWaiters.get(msg.id)?.();
+				win.webContents.send(msg.type, msg); // out / exited / status → UI
+			}
 		}
 	});
 	sock.on("close", () => {
@@ -94,11 +103,11 @@ app.whenReady().then(async () => {
 	});
 
 	// ── UI → daemon ──
-	ipcMain.handle("new-thread", async (_e, { repo, task }) => {
-		const r = await rpc({ type: "spawn", repo, task });
+	ipcMain.handle("new-thread", async (_e, { repo, task, size }) => {
+		const r = await rpc({ type: "spawn", repo, task, size });
 		return r.error ? { error: r.error } : r.thread;
 	});
-	ipcMain.handle("resume", async (_e, meta) => (await rpc({ type: "resume", meta })) as { id: number });
+	ipcMain.handle("resume", async (_e, { meta, size }) => (await rpc({ type: "resume", meta, size })) as { id: number });
 	ipcMain.handle("kill", async (_e, id: number) => await rpc({ type: "kill", id }));
 	ipcMain.on("in", (_e, { id, text }) => write({ type: "in", id, text }));
 	// daemon resizes the PTY; the kernel then sends SIGWINCH to the agent
@@ -132,6 +141,79 @@ app.whenReady().then(async () => {
 			return { changed, all };
 		} catch (err) {
 			return { changed: [], all: [], error: String((err as Error).message) };
+		}
+	});
+
+	// ── pen lifecycle: merge (local), open PR (GitHub), delete. separate actions, like Paradev ──
+	const fail = (err: unknown) => ({ error: String((err as Error).message ?? err) });
+
+	// kill the agent and wait for the "exited" broadcast, so claude can't write into a pen we're touching.
+	// (not polling `list`: it replays every agent's scrollback each call.) 5s cap: SIGKILL lands at 3s.
+	async function stopAgent(id: number | null) {
+		if (id === null) return;
+		const dead = new Promise<void>((r) => {
+			exitWaiters.set(id, r);
+			setTimeout(r, 5000);
+		});
+		const r = (await rpc({ type: "kill", id })) as { error?: string };
+		if (!r.error) await dead; // "no such agent" = already dead, nothing to wait for
+		exitWaiters.delete(id);
+	}
+	// claude edits files but never commits: without this, merge/PR would carry nothing
+	function commitIfDirty(pen: string, message: string) {
+		if (!git(pen, "status", "--porcelain").trim()) return;
+		git(pen, "add", "-A");
+		git(pen, "commit", "-q", "-m", message);
+	}
+
+	// merge locally into whatever branch the repo has checked out. pen is KEPT (delete is its own action)
+	ipcMain.handle("merge", async (_e, { id, repo, pen, branch, message }) => {
+		try {
+			await stopAgent(id);
+			commitIfDirty(pen, message);
+			try {
+				git(repo, "merge", "--no-edit", branch);
+			} catch (err) {
+				try { git(repo, "merge", "--abort"); } catch {} // nothing to abort if merge refused to start
+				return { error: `merge failed, nothing changed: ${(err as Error).message}` };
+			}
+			return { ok: true };
+		} catch (err) {
+			return fail(err);
+		}
+	});
+
+	// push the branch and open a PR on GitHub. agent keeps running: a PR isn't the end of the work
+	ipcMain.handle("open-pr", async (_e, { pen, branch, message }) => {
+		try {
+			commitIfDirty(pen, message);
+			git(pen, "push", "-q", "-u", "origin", branch);
+			const url = execFileSync("gh", ["pr", "create", "--head", branch, "--title", message, "--body", "Opened from Corral."], {
+				cwd: pen,
+				encoding: "utf8",
+			}).trim();
+			return { ok: true, url };
+		} catch (err) {
+			return fail(err);
+		}
+	});
+
+	// delete: refuses unmerged work unless force. fast path stolen from Paradev's removeWorktree:
+	// rename (instant, same fs) → prune (git forgets it) → rm -rf in the background (UI never waits on node_modules)
+	ipcMain.handle("delete-pen", async (_e, { id, repo, pen, branch, force }) => {
+		try {
+			const dirty = git(pen, "status", "--porcelain").trim() !== "";
+			const merged = git(repo, "branch", "--merged", "HEAD", "--format=%(refname:short)").split("\n").includes(branch);
+			if (!force && (dirty || !merged)) return { needsForce: true, dirty, merged };
+			await stopAgent(id);
+			const tmp = join(dirname(pen), `.corral-delete-${Date.now()}`);
+			renameSync(pen, tmp);
+			git(repo, "worktree", "prune");
+			git(repo, "branch", "-D", branch); // safe to force: we checked merged/dirty above (or the user said force)
+			spawn("/bin/rm", ["-rf", tmp], { detached: true, stdio: "ignore" }).unref();
+			return { ok: true };
+		} catch (err) {
+			return fail(err);
 		}
 	});
 

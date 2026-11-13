@@ -54,12 +54,13 @@ const send = (c: net.Socket, msg: object) => c.write(JSON.stringify(msg) + "\n")
 const broadcast = (msg: object) => clients.forEach((c) => send(c, msg));
 const info = (a: Agent) => ({ id: a.id, repo: a.repo, task: a.task, branch: a.branch, pen: a.pen, state: a.state, alive: true });
 
-function spawnAgent(meta: Omit<Agent, "id" | "term" | "state">, args: string[], state: Agent["state"]) {
+function spawnAgent(meta: Omit<Agent, "id" | "term" | "state">, args: string[], state: Agent["state"], size?: { cols: number; rows: number }) {
 	const id = ++n;
 	const isClaude = basename(agentCmd) === "claude";
 	const term = pty.spawn(agentCmd, isClaude ? ["--settings", HOOK_SETTINGS, ...args] : args, {
-		cols: 100,
-		rows: 30,
+		// born at the UI's real size when it knows it: a guessed size = claude's first frames land on the wrong grid
+		cols: size?.cols || 100,
+		rows: size?.rows || 30,
 		cwd: meta.pen,
 		// hooks are claude's children → they inherit this and know which thread they belong to
 		env: { ...agentEnv(), CORRAL_THREAD: String(id) } as Record<string, string>,
@@ -95,13 +96,13 @@ function handle(c: net.Socket, msg: any) {
 		case "spawn":
 			try {
 				const { pen, branch } = createPen(msg.repo, msg.task, n + 1);
-				const a = spawnAgent({ repo: msg.repo, task: msg.task, branch, pen }, [msg.task], "working");
+				const a = spawnAgent({ repo: msg.repo, task: msg.task, branch, pen }, [msg.task], "working", msg.size);
 				return reply({ thread: info(a) });
 			} catch (err) {
 				return reply({ error: String((err as Error).message) });
 			}
 		case "resume": {
-			const a = spawnAgent(msg.meta, agentCmd === "claude" ? ["--continue"] : [], "waiting");
+			const a = spawnAgent(msg.meta, agentCmd === "claude" ? ["--continue"] : [], "waiting", msg.size);
 			return reply({ id: a.id });
 		}
 		case "kill": {

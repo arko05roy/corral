@@ -41,12 +41,15 @@ export function getTerm(id: number) {
 }
 
 const fits = new Map<number, FitAddon>();
+// agents the UI spawned at a measured size: they need no forced redraw
+export const bornAtSize = new Set<number>();
 
 // open into the DOM, then switch to the GPU renderer: it draws block/box chars (▛█▜) as exact
 // cell-filling rects instead of font glyphs, so pixel art doesn't get gaps from lineHeight.
 export async function openTerm(id: number, el: HTMLElement) {
 	const t = getTerm(id);
 	if (t.element) return;
+	if (!bornAtSize.has(id)) forceRedraw(id); // spawned before we knew the real size
 	t.open(el);
 	// GPU renderer bakes glyphs into a texture once: font must be loaded first or it bakes the wrong metrics
 	await document.fonts.load('400 13px "SF Mono"').catch(() => {});
@@ -65,21 +68,49 @@ export async function openTerm(id: number, el: HTMLElement) {
 	fitTerm(id); // cell size changed with the real font → re-measure
 }
 
+// last real size any terminal fitted to. every thread renders in the same panel, so this is the size
+// a NEW agent should be born at (Paradev: createOrAttach({ cols: xterm.cols, rows: xterm.rows })).
+export let lastSize: { cols: number; rows: number } | null = null;
+
 // measure the panel's pixels ÷ one cell's pixels → real cols×rows. Skips hidden (0×0) panels.
 export function fitTerm(id: number) {
-	const el = terms.get(id)?.element?.parentElement;
-	if (!el || el.clientWidth === 0 || el.clientHeight === 0) return;
+	const t = terms.get(id);
+	const el = t?.element?.parentElement;
+	if (!t || !el || el.clientWidth === 0 || el.clientHeight === 0) return;
 	fits.get(id)?.fit();
+	lastSize = { cols: t.cols, rows: t.rows };
+}
+
+// fallback when the agent was born at a GUESSED size (first thread after launch, re-attached agents):
+// frames drawn for the guess may land after our resize. a 1-col wiggle once things settle forces a clean
+// full redraw — what dragging the window did by hand. (Paradev's version: refit timers at 100/350ms.)
+export function forceRedraw(id: number) {
+	setTimeout(() => {
+		const t = terms.get(id);
+		if (!t?.element || t.cols < 2) return;
+		t.resize(t.cols - 1, t.rows); // → onResize → PTY resize → SIGWINCH
+		setTimeout(() => fitTerm(id), 60); // back to the real size → second SIGWINCH → full redraw
+	}, 350);
 }
 
 declare global {
 	interface Window {
 		corral: {
 			pickRepo(): Promise<string | null>;
-			newThread(repo: string, task: string): Promise<Thread | { error: string }>;
+			newThread(repo: string, task: string, size: { cols: number; rows: number } | null): Promise<Thread | { error: string }>;
 			listPens(repo: string): Promise<Omit<Thread, "id">[]>;
-			resume(meta: { repo: string; task: string; branch: string; pen: string }): Promise<{ id: number }>;
+			resume(meta: { repo: string; task: string; branch: string; pen: string }, size: { cols: number; rows: number } | null): Promise<{ id: number }>;
 			files(pen: string): Promise<{ changed: { status: string; path: string }[]; all: string[]; error?: string }>;
+			kill(id: number): Promise<{ ok?: true; error?: string }>;
+			merge(args: { id: number | null; repo: string; pen: string; branch: string; message: string }): Promise<{ ok?: true; error?: string }>;
+			openPr(args: { pen: string; branch: string; message: string }): Promise<{ ok?: true; url?: string; error?: string }>;
+			deletePen(args: { id: number | null; repo: string; pen: string; branch: string; force: boolean }): Promise<{
+				ok?: true;
+				error?: string;
+				needsForce?: true;
+				dirty?: boolean;
+				merged?: boolean;
+			}>;
 			send(id: number, text: string): void;
 			resize(id: number, cols: number, rows: number): void;
 			on(channel: string, fn: (data: any) => void): () => void;

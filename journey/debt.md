@@ -19,3 +19,6 @@
 - ~~"branch already exists" on restart~~ → createPen skips taken names.
 - ~~Agents die with the app~~ → corrald + replay buffer (v4).
 - kill signals only the agent pid; its children rely on the kernel HUPing the PTY's process group (no explicit process-tree kill like Paradev).
+- delete-pen "unmerged" check uses local `git branch --merged`: a PR squash-merged on GitHub still reads UNMERGED → false warning. Fix: ask gh for PR state (like Paradev getPRForBranch).
+- Changes tab shows only UNCOMMITTED files: once a pen is committed (merge/PR/failed merge) it shows 0 even though the branch has work. Show diff vs merge-base instead.
+- no tsc in project: UI/main types only checked by vite build (which strips types). Add typescript + typecheck script.
