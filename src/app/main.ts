@@ -2,7 +2,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import * as net from "node:net";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { codeVersion } from "../version.ts";
@@ -160,6 +160,9 @@ app.whenReady().then(async () => {
 		const r = await rpc({ type: "spawn", repo, task, size });
 		return r.error ? { error: r.error } : r.thread;
 	});
+	ipcMain.handle("hostname", () => hostname()); // OSC 7 carries a host: local folder vs one on an ssh server
+	// plain shell (Corral as a terminal). cwd null → home
+	ipcMain.handle("new-shell", async (_e, { cwd, size }) => ((await rpc({ type: "shell", cwd: cwd ?? homedir(), size })) as { thread: unknown }).thread);
 	ipcMain.handle("resume", async (_e, { meta, size }) => (await rpc({ type: "resume", meta, size })) as { id: number });
 	ipcMain.handle("kill", async (_e, id: number) => await rpc({ type: "kill", id }));
 	ipcMain.on("in", (_e, { id, text }) => write({ type: "in", id, text }));
@@ -376,19 +379,42 @@ app.whenReady().then(async () => {
 		return { ok: true, text: up.ok ? `Cleaned up #${done.number}. ${up.text}` : `Thread deleted. Local main not updated: ${up.error}` };
 	});
 
+	// the repo list survives restarts. before: rebuilt only from LIVE agents, so a daemon restart (or just no
+	// agent running) emptied the sidebar and hid every pen on disk
+	const WS = join(homedir(), ".corral", "workspaces.json");
+	const loadRepos = (): string[] => {
+		try {
+			return (JSON.parse(readFileSync(WS, "utf8")) as string[]).filter((r) => existsSync(r));
+		} catch {
+			return [];
+		}
+	};
+	const rememberRepo = (repo: string) => {
+		const all = loadRepos();
+		if (!all.includes(repo)) writeFileSync(WS, JSON.stringify([...all, repo], null, 2));
+	};
 	ipcMain.handle("pick-repo", async () => {
 		const r = await dialog.showOpenDialog(win, { properties: ["openDirectory"] });
-		return r.canceled ? null : r.filePaths[0];
+		if (r.canceled) return null;
+		rememberRepo(r.filePaths[0]);
+		return r.filePaths[0];
 	});
 
 	win.webContents.on("did-finish-load", async () => {
 		// RE-ATTACH: whatever the daemon is running shows up again
 		const { threads } = await rpc({ type: "list" });
 		for (const t of threads) win.webContents.send("thread", t);
+		// a terminal always has a terminal: no shell alive → one in your home folder
+		if (!threads.some((t: { kind?: string }) => t.kind === "shell"))
+			win.webContents.send("thread", ((await rpc({ type: "shell", cwd: homedir() })) as { thread: unknown }).thread);
+
+		// saved repos come back (their pens get listed by the UI)
+		for (const repo of loadRepos()) win.webContents.send("workspace", repo);
 
 		// optional CLI preload: `npm run app <repo> "task" ...`
 		if (repoArg) {
 			const repo = resolve(repoArg);
+			rememberRepo(repo);
 			win.webContents.send("workspace", repo);
 			for (const task of tasks) {
 				const r = await rpc({ type: "spawn", repo, task });

@@ -33,6 +33,18 @@ export function getTerm(id: number) {
 		t.loadAddon(fit);
 		fits.set(id, fit);
 		t.onData((text) => window.corral.send(id, text));
+		// OSC 7 = the shell saying "I'm in <folder> now" before each prompt (our injected zsh hook prints it).
+		// xterm's parser hands us the payload even if it arrived split across chunks. replayed scrollback
+		// contains old OSC 7s too, so after a restart the folder is known before the next prompt
+		t.parser.registerOscHandler(7, (data) => {
+			try {
+				const u = new URL(data); // file://host/path
+				const path = decodeURIComponent(u.pathname);
+				cwds.set(id, { path, host: u.hostname });
+				cwdListeners.forEach((fn) => fn(id, path, u.hostname));
+			} catch {} // malformed → ignore, never break the terminal over it
+			return true; // handled: don't let xterm do anything else with it
+		});
 		// grid changed size → tell the PTY → kernel sends SIGWINCH → agent redraws
 		t.onResize(({ cols, rows }) => window.corral.resize(id, cols, rows));
 		terms.set(id, t);
@@ -41,6 +53,13 @@ export function getTerm(id: number) {
 }
 
 const fits = new Map<number, FitAddon>();
+// each shell's current folder, as last reported by OSC 7
+export const cwds = new Map<number, { path: string; host: string }>();
+const cwdListeners = new Set<(id: number, path: string, host: string) => void>();
+export function onCwd(fn: (id: number, path: string, host: string) => void) {
+	cwdListeners.add(fn);
+	return () => cwdListeners.delete(fn);
+}
 // agents the UI spawned at a measured size: they need no forced redraw
 export const bornAtSize = new Set<number>();
 
@@ -100,6 +119,8 @@ declare global {
 			newThread(repo: string, task: string, size: { cols: number; rows: number } | null): Promise<Thread | { error: string }>;
 			listPens(repo: string): Promise<Omit<Thread, "id">[]>;
 			resume(meta: { repo: string; task: string; branch: string; pen: string }, size: { cols: number; rows: number } | null): Promise<{ id: number }>;
+			newShell(cwd: string | null, size: { cols: number; rows: number } | null): Promise<Thread>;
+			hostname(): Promise<string>;
 			files(pen: string): Promise<{ changed: { status: string; path: string }[]; all: string[]; error?: string }>;
 			readFile(pen: string, path: string): Promise<{ text?: string; binary?: true; tooBig?: true; size?: number; error?: string }>;
 			readBase(pen: string, path: string): Promise<{ text?: string; binary?: true; error?: string }>;
@@ -136,6 +157,9 @@ declare global {
 // id = live agent session (null = old pen, nothing running yet). pen = its folder, the stable key.
 export type Thread = {
 	id: number | null;
+	kind?: "agent" | "shell"; // shell = plain $SHELL (pen is "shell:<id>", the folder is cwd)
+	cwd?: string;
+	host?: string; // from OSC 7: not your Mac = an ssh session
 	repo: string;
 	task: string;
 	branch: string;

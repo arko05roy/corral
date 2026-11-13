@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld("corral", {
 	newThread: (repo, task, size) => ipcRenderer.invoke("new-thread", { repo, task, size }),
 	listPens: (repo) => ipcRenderer.invoke("list-pens", repo),
 	resume: (meta, size) => ipcRenderer.invoke("resume", { meta, size }),
+	newShell: (cwd, size) => ipcRenderer.invoke("new-shell", { cwd, size }),
+	hostname: () => ipcRenderer.invoke("hostname"),
 	kill: (id) => ipcRenderer.invoke("kill", id),
 	merge: (args) => ipcRenderer.invoke("merge", args),
 	openPr: (args) => ipcRenderer.invoke("open-pr", args),

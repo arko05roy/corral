@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { CodeView } from "./CodeView";
 import { FileIcon, FolderIcon } from "./FileIcon";
 import { GitPanel, RepoSetup } from "./git";
-import { bornAtSize, fitTerm, getTerm, lastSize, openTerm, type Thread } from "./terms";
+import { bornAtSize, fitTerm, getTerm, lastSize, onCwd, openTerm, type Thread } from "./terms";
 
 const repoName = (p: string) => p.split("/").pop() ?? p;
 
@@ -73,7 +73,7 @@ export function App() {
 	};
 
 	const addThread = (t: Thread) => {
-		addWorkspace(t.repo);
+		if (t.kind !== "shell") addWorkspace(t.repo);
 		upsert([{ ...t, alive: true, state: t.state ?? "working" }]); // daemon tells us the state on re-attach
 		setActive(t.pen);
 	};
@@ -89,6 +89,13 @@ export function App() {
 		}
 	}
 
+	async function newShell(cwd: string | null = null) {
+		const size = lastSize;
+		const t = await window.corral.newShell(cwd, size);
+		if (size && t.id !== null) bornAtSize.add(t.id);
+		addThread(t);
+	}
+
 	async function pickRepo() {
 		const repo = await window.corral.pickRepo();
 		if (repo) {
@@ -96,6 +103,21 @@ export function App() {
 			setHomeRepo(repo);
 		}
 	}
+
+	// OSC 7 → each shell's live folder. a different host = you ssh'd somewhere: shown, never used for "+"
+	const [localHost, setLocalHost] = useState("");
+	useEffect(() => {
+		window.corral.hostname().then(setLocalHost);
+		return onCwd((id, path, host) =>
+			setThreads((ts) => ts.map((t) => (t.id === id && t.kind === "shell" ? { ...t, cwd: path, host } : t))),
+		);
+	}, []);
+	const sameHost = (h?: string) => !h || h.toLowerCase().replace(/\.local$/, "") === localHost.toLowerCase().replace(/\.local$/, "");
+	const shellLabel = (t: Thread) => {
+		const dir = t.cwd ?? "";
+		const name = /^\/Users\/[^/]+\/?$/.test(dir) ? "~" : dir.split("/").filter(Boolean).pop() ?? "/";
+		return sameHost(t.host) ? name : `${t.host?.split(".")[0]}:${name}`;
+	};
 
 	useEffect(() => {
 		const offs = [
@@ -106,7 +128,16 @@ export function App() {
 				setThreads((ts) => ts.map((t) => (t.id === id ? { ...t, state } : t))),
 			),
 			window.corral.on("exited", ({ id }) =>
-				setThreads((ts) => ts.map((t) => (t.id === id ? { ...t, alive: false } : t))),
+				setThreads((ts) => {
+					const gone = ts.find((t) => t.id === id);
+					// a shell that exits (you typed `exit`) is just gone: nothing to resume, unlike an agent's pen
+					if (gone?.kind === "shell") {
+						const rest = ts.filter((t) => t.id !== id);
+						setActive((a) => (a === gone.pen ? (rest.find((t) => t.kind === "shell")?.pen ?? null) : a));
+						return rest;
+					}
+					return ts.map((t) => (t.id === id ? { ...t, alive: false } : t));
+				}),
 			),
 		];
 		return () => offs.forEach((off) => off());
@@ -122,6 +153,31 @@ export function App() {
 					<SquarePen size={15} strokeWidth={1.75} />
 					New thread
 				</button>
+
+				<div className="section-label">
+					<span>Terminals</span>
+					<button
+						className="icon-btn"
+						onClick={() => {
+							const cur = threads.find((t) => t.pen === active && t.kind === "shell");
+							newShell(cur && sameHost(cur.host) ? (cur.cwd ?? null) : null);
+						}}
+						title="New terminal (starts where the current one is)"
+						aria-label="New terminal"
+					>
+						<Plus size={14} strokeWidth={1.75} />
+					</button>
+				</div>
+				<nav className="shells">
+					{threads
+						.filter((t) => t.kind === "shell")
+						.map((t) => (
+							<button key={t.pen} className={`thread shell ${t.pen === active ? "active" : ""}`} onClick={() => setActive(t.pen)} title={t.cwd}>
+								<TerminalIcon size={13} strokeWidth={1.75} />
+								<span className="name">{shellLabel(t)}</span>
+							</button>
+						))}
+				</nav>
 
 				<div className="section-label">
 					<span>Repos</span>
@@ -156,11 +212,18 @@ export function App() {
 				{current ? (
 					<>
 						<header className="topbar">
-							<span className="task">{current.task}</span>
-							<span className="chip mono">
-								<GitBranch size={12} strokeWidth={1.75} />
-								{current.branch}
-							</span>
+							<span className="task">{current.kind === "shell" ? "Terminal" : current.task}</span>
+							{current.kind === "shell" ? (
+								<span className="chip mono" title={current.cwd}>
+									<Folder size={12} strokeWidth={1.75} />
+									{current.cwd?.replace(/^\/Users\/[^/]+/, "~")}
+								</span>
+							) : (
+								<span className="chip mono">
+									<GitBranch size={12} strokeWidth={1.75} />
+									{current.branch}
+								</span>
+							)}
 							<span className="spacer" />
 							{current.alive && current.id !== null && (
 								<button
@@ -172,14 +235,14 @@ export function App() {
 									<Square size={13} strokeWidth={1.75} />
 								</button>
 							)}
-							<button
+							{current.kind !== "shell" && <button
 								className={`icon-btn ${filesOpen ? "on" : ""}`}
 								onClick={() => setFilesOpen((o) => !o)}
 								title="Toggle files"
 								aria-label="Toggle files"
 							>
 								<PanelRight size={15} strokeWidth={1.75} />
-							</button>
+							</button>}
 						</header>
 						<div className="workarea">
 							<div className="sky">
@@ -189,7 +252,7 @@ export function App() {
 										<Screen key={t.id} id={t.id!} shown={t.pen === active} />
 									))}
 							</div>
-							{filesOpen && (
+							{filesOpen && current.kind !== "shell" && (
 								<Files
 									thread={current}
 									onOpen={(path, diff) => openFile(current.pen, path, diff)}
@@ -392,9 +455,19 @@ function Screen({ id, shown }: { id: number; shown: boolean }) {
 		if (!shown) return; // hidden panels are 0×0, never fit those
 		fitTerm(id);
 		getTerm(id).focus();
+		// xterm stops PAINTING while hidden (display:none) but keeps buffering output. on show nothing tells it to
+		// repaint (same size → fit is a no-op, no SIGWINCH) = black screen. wait a frame for display:block, then
+		// force every row to be redrawn from the buffer
+		const raf = requestAnimationFrame(() => {
+			const t = getTerm(id);
+			t.refresh(0, t.rows - 1);
+		});
 		const ro = new ResizeObserver(() => fitTerm(id)); // window drag, files panel toggle…
 		ro.observe(ref.current!);
-		return () => ro.disconnect();
+		return () => {
+			cancelAnimationFrame(raf);
+			ro.disconnect();
+		};
 	}, [shown, id]);
 	return <div ref={ref} className={`screen ${shown ? "shown" : ""}`} />;
 }

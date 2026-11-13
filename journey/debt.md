@@ -27,3 +27,6 @@
 - PR window: no inline diff of PR files, no review (approve/request changes) yet.
 - ai commit message untested in-app (claude -p); gh repo create untested (user-triggered).
 - old corral/<slug>-<n> pens keep their long names.
+- shell integration is zsh-only (bash/fish shells get no OSC 7 → "+" falls back to ~).
+- status lamps dark for hand-typed `claude` (hooks only injected when Corral launches claude). Fix idea: claude() wrapper in our .zshrc.
+- shells have no git panel / file viewer yet (v6.1: attach to the shell's live cwd).

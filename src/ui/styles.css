@@ -540,3 +540,9 @@ button.ghost.danger:hover:not(:disabled) { background: #f0717814; color: var(--d
 .git-grid button:disabled { opacity: 0.38; cursor: default; }
 .git-grid button:disabled:hover { background: none; color: var(--fg-2); }
 .git-count.main { background: #e5c07b1f; color: #e5c07b; font-family: var(--ui); }
+
+/* Terminals section (Corral as a terminal: plain shells) */
+.shells { display: flex; flex-direction: column; gap: 1px; padding: 0 8px 10px; }
+.thread.shell { display: flex; align-items: center; gap: 8px; }
+.thread.shell svg { flex: none; color: var(--fg-faint); }
+.thread.shell.active svg { color: var(--fg-2); }

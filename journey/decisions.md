@@ -27,3 +27,5 @@
 - 2026-11-13 editor: CodeMirror 6 over Monaco (themeable, Corral look). File viewer as blurred modal with tree (user sketch).
 - 2026-11-13 diff baseline: merge-base, after demo showed "real repo now" fakes deletions.
 - 2026-11-13 git: full lazy-git panel, grouped list layout; pull = from a picked branch; branches short + prefix-free, internals hidden; push into main allowed (no -u); PR window blurred like the file viewer.
+- 2026-11-13 PIVOT: Corral is a terminal first. Shells by default (in ~); isolated workspaces (pens) stay as opt-in (option A). New tabs start in the current tab's folder.
+- 2026-11-13 cwd tracking: OSC 7 parsed by xterm (not daemon); zsh hook injected via ZDOTDIR (never edit user dotfiles).
