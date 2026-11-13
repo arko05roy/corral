@@ -2,7 +2,6 @@ import {
 	ArrowUp,
 	ChevronDown,
 	ChevronRight,
-	FileText,
 	Folder,
 	FolderPlus,
 	GitBranch,
@@ -12,8 +11,12 @@ import {
 	Square,
 	SquarePen,
 	Terminal as TerminalIcon,
+	X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { CodeView } from "./CodeView";
+import { FileIcon, FolderIcon } from "./FileIcon";
+import { GitPanel, RepoSetup } from "./git";
 import { bornAtSize, fitTerm, getTerm, lastSize, openTerm, type Thread } from "./terms";
 
 const repoName = (p: string) => p.split("/").pop() ?? p;
@@ -24,6 +27,31 @@ export function App() {
 	const [active, setActive] = useState<string | null>(null); // pen path; null = composer home
 	const [homeRepo, setHomeRepo] = useState<string | null>(null);
 	const [filesOpen, setFilesOpen] = useState(true);
+	// open file tabs, per pen: switching threads brings back that thread's tabs. active null = the terminal
+	const [tabs, setTabs] = useState<Record<string, { open: string[]; active: string | null }>>({});
+	const tabsOf = (pen: string) => tabs[pen] ?? { open: [], active: null };
+	// per open file: diff (merge-base vs now) or plain view. Changes → diff, Files → plain, toggle in the modal
+	const [diffs, setDiffs] = useState<Record<string, boolean>>({});
+	const isDiff = (pen: string, path: string) => diffs[`${pen}\n${path}`] ?? false;
+	const setDiff = (pen: string, path: string, on: boolean) => setDiffs((d) => ({ ...d, [`${pen}\n${path}`]: on }));
+	const openFile = (pen: string, path: string, diff?: boolean) => {
+		if (diff !== undefined) setDiff(pen, path, diff);
+		setTabs((all) => {
+			const cur = all[pen] ?? { open: [], active: null };
+			return { ...all, [pen]: { open: cur.open.includes(path) ? cur.open : [...cur.open, path], active: path } };
+		});
+	};
+	const showTab = (pen: string, path: string | null) =>
+		setTabs((all) => ({ ...all, [pen]: { ...(all[pen] ?? { open: [] }), active: path } }));
+	const closeFile = (pen: string, path: string) =>
+		setTabs((all) => {
+			const cur = all[pen] ?? { open: [], active: null };
+			const i = cur.open.indexOf(path);
+			const open = cur.open.filter((p) => p !== path);
+			// closing the active tab → its left neighbour, or back to the terminal
+			const active = cur.active === path ? (open[i - 1] ?? open[i] ?? null) : cur.active;
+			return { ...all, [pen]: { open, active } };
+		});
 
 	const upsert = (incoming: Thread[]) =>
 		setThreads((ts) => {
@@ -164,6 +192,7 @@ export function App() {
 							{filesOpen && (
 								<Files
 									thread={current}
+									onOpen={(path, diff) => openFile(current.pen, path, diff)}
 									onDeleted={() => {
 										setThreads((ts) => ts.filter((t) => t.pen !== current.pen));
 										setActive(null); // back to composer home: the pen no longer exists
@@ -182,6 +211,23 @@ export function App() {
 					/>
 				)}
 			</main>
+			{current && tabsOf(current.pen).active !== null && (
+				<FileModal
+					thread={current}
+					onDeleted={() => {
+						setThreads((ts) => ts.filter((t) => t.pen !== current.pen));
+						setActive(null);
+					}}
+					pen={current.pen}
+					open={tabsOf(current.pen).open}
+					active={tabsOf(current.pen).active!}
+					diff={isDiff(current.pen, tabsOf(current.pen).active!)}
+					onToggleDiff={(on) => setDiff(current.pen, tabsOf(current.pen).active!, on)}
+					onShow={(p, d) => openFile(current.pen, p, d)}
+					onClose={() => showTab(current.pen, null)}
+					onCloseTab={(p) => closeFile(current.pen, p)}
+				/>
+			)}
 		</div>
 	);
 }
@@ -331,6 +377,7 @@ function Home(props: {
 				<p className={`composer-note ${error ? "error" : ""}`}>
 					{error || (busy ? "Creating the branch and starting the agent…" : "⏎ to start · ⇧⏎ for a new line")}
 				</p>
+				<RepoSetup repo={props.repo} />
 			</div>
 		</div>
 	);
@@ -370,100 +417,77 @@ const sortKids = (node: Tree) =>
 		return ad === bd ? a.localeCompare(b) : ad ? -1 : 1; // folders first
 	});
 
-function TreeNode({ name, node, depth }: { name: string; node: Tree; depth: number }) {
-	const [open, setOpen] = useState(false);
+function TreeNode(props: {
+	name: string;
+	node: Tree;
+	depth: number;
+	dir: string;
+	onOpen: (path: string, diff?: boolean) => void;
+	status: Record<string, string>; // path → M/A/D/? for files claude touched
+	current: string | null; // file open in the modal
+}) {
+	const { name, node, depth, dir, onOpen, status, current } = props;
+	const path = dir ? `${dir}/${name}` : name;
+	// folders holding the open file start expanded, so you can see where it lives
+	const [open, setOpen] = useState(() => !!current?.startsWith(path + "/"));
 	const kids = sortKids(node);
-	const pad = { paddingLeft: 12 + depth * 14 };
-	if (kids.length === 0)
+	const pad = { paddingLeft: 10 + depth * 14 };
+	if (kids.length === 0) {
+		const s = status[path];
 		return (
-			<li className="row" style={pad}>
-				<FileText size={13} strokeWidth={1.5} />
-				<span>{name}</span>
+			<li>
+				<button className={`row ${s ? `st-${s === "?" ? "U" : s}` : ""} ${path === current ? "on" : ""}`} style={pad} onClick={() => onOpen(path)} title={path}>
+					<span className="chev" />
+					<FileIcon path={path} />
+					<span className="name">{name}</span>
+					{s && <span className="letter">{s === "?" ? "U" : s}</span>}
+				</button>
 			</li>
 		);
+	}
 	const Chevron = open ? ChevronDown : ChevronRight;
+	const dirty = !open && Object.keys(status).some((p) => p.startsWith(path + "/")); // closed folder hiding changes
 	return (
 		<li>
-			<button className="row" style={pad} onClick={() => setOpen((o) => !o)}>
-				<Chevron size={12} strokeWidth={1.75} />
-				<span>{name}</span>
+			<button className="row folder" style={pad} onClick={() => setOpen((o) => !o)}>
+				<Chevron className="chev" size={12} strokeWidth={1.75} />
+				<FolderIcon name={name} open={open} />
+				<span className="name">{name}</span>
+				{dirty && <span className="dot" />}
 			</button>
-			{open && <ul>{kids.map((k) => <TreeNode key={k} name={k} node={node[k]} depth={depth + 1} />)}</ul>}
+			{open && <ul>{kids.map((k) => <TreeNode key={k} name={k} node={node[k]} depth={depth + 1} dir={path} onOpen={onOpen} status={status} current={current} />)}</ul>}
 		</li>
 	);
 }
 
-function Files({ thread, onDeleted }: { thread: Thread; onDeleted: () => void }) {
-	const pen = thread.pen;
-	const [data, setData] = useState<Awaited<ReturnType<typeof window.corral.files>> | null>(null);
-	const [tab, setTab] = useState<"changes" | "files">("changes");
-	// pen actions. mode: which box is open. merge/pr = review changes + edit commit message, then confirm
-	const [mode, setMode] = useState<null | "merge" | "pr" | "delete">(null);
-	const [msg, setMsg] = useState("");
-	const [busy, setBusy] = useState(false);
-	const [err, setErr] = useState<string | null>(null);
-	const [done, setDone] = useState<{ text: string; url?: string } | null>(null);
-	const [warn, setWarn] = useState<string | null>(null); // delete: unmerged/dirty → needs a second click
-	useEffect(() => {
-		setMode(null);
-		setErr(null);
-		setDone(null);
-		setWarn(null);
-	}, [pen]);
+type PenFiles = Awaited<ReturnType<typeof window.corral.files>>;
+type ListTab = "changes" | "files";
 
-	const id = thread.alive ? thread.id : null;
-	const open = (m: "merge" | "pr") => {
-		setTab("changes");
-		setMsg(`corral: ${thread.task}`);
-		setErr(null);
-		setDone(null);
-		setMode(m);
-	};
-	async function run<T extends { error?: string }>(p: Promise<T>) {
-		setBusy(true);
-		setErr(null);
-		const r = await p;
-		setBusy(false);
-		if (r.error) setErr(r.error);
-		return r;
-	}
-	async function confirm() {
-		const message = msg.trim() || `corral: ${thread.task}`;
-		if (mode === "merge") {
-			const r = await run(window.corral.merge({ id, repo: thread.repo, pen, branch: thread.branch, message }));
-			if (r.ok) setDone({ text: `Merged ${thread.branch} into your current branch.` });
-		} else if (mode === "pr") {
-			const r = await run(window.corral.openPr({ pen, branch: thread.branch, message }));
-			if (r.ok) setDone({ text: "PR opened:", url: r.url });
-		}
-		setMode(null);
-	}
-	async function del(force: boolean) {
-		setMode("delete");
-		const r = await run(window.corral.deletePen({ id, repo: thread.repo, pen, branch: thread.branch, force }));
-		if (r.needsForce) {
-			setWarn(
-				[r.dirty && "uncommitted changes", !r.merged && "work not merged into your current branch"].filter(Boolean).join(" and ") +
-					". Deleting throws it away for good.",
-			);
-		} else if (r.ok) onDeleted();
-	}
-
+// git status + file list of one pen, re-polled every 2s while mounted (only for threads you're looking at)
+function usePenFiles(pen: string) {
+	const [data, setData] = useState<PenFiles | null>(null);
 	useEffect(() => {
 		let live = true;
 		const load = () => window.corral.files(pen).then((d) => live && setData(d));
 		load();
-		const timer = setInterval(load, 2000); // only the thread you're looking at
+		const timer = setInterval(load, 2000);
 		return () => {
 			live = false;
 			clearInterval(timer);
 		};
 	}, [pen]);
+	return data;
+}
 
+// Changes / Files tabs + their lists. shared by the side panel and the file modal
+function FileLists({ data, tab, setTab, onOpen, current }: { data: PenFiles | null; tab: ListTab; setTab: (t: ListTab) => void; onOpen: (path: string, diff?: boolean) => void; current?: string | null }) {
 	const tree = buildTree(data?.all ?? []);
 	const n = data?.changed.length ?? 0;
+	// path → git status, so the Files tree can tint what claude touched
+	const status: Record<string, string> = {};
+	for (const f of data?.changed ?? []) status[f.path] = f.status;
 	return (
-		<aside className="files">
+		<>
 			<div className="tabs">
 				<button className={tab === "changes" ? "on" : ""} onClick={() => setTab("changes")}>
 					Changes{n > 0 && <span className="count">{n}</span>}
@@ -476,9 +500,11 @@ function Files({ thread, onDeleted }: { thread: Thread; onDeleted: () => void })
 				n ? (
 					<ul className="changed">
 						{data!.changed.map((f) => (
-							<li key={f.path} className="row" title={f.path}>
-								<span className="path">{f.path}</span>
-								<span className={`badge s-${f.status[0]}`}>{f.status[0]}</span>
+							<li key={f.path} className={`row ${f.path === current ? "on" : ""} ${f.status === "D" ? "gone" : ""}`} title={f.path} onClick={() => f.status !== "D" && onOpen(f.path, true)}>
+								<FileIcon path={f.path} />
+								<span className="name">{f.path.split("/").pop()}</span>
+								<span className="dir">{f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : ""}</span>
+								<span className={`badge s-${f.status}`}>{f.status === "?" ? "U" : f.status}</span>
 							</li>
 						))}
 					</ul>
@@ -488,60 +514,80 @@ function Files({ thread, onDeleted }: { thread: Thread; onDeleted: () => void })
 			) : (
 				<ul className="tree">
 					{sortKids(tree).map((k) => (
-						<TreeNode key={k} name={k} node={tree[k]} depth={0} />
+						<TreeNode key={k} name={k} node={tree[k]} depth={0} dir="" onOpen={onOpen} status={status} current={current ?? null} />
 					))}
 				</ul>
 			)}
-			<div className="merge">
-				{done && (
-					<p className="quiet">
-						{done.text}{" "}
-						{done.url && (
-							<a href={done.url} target="_blank" rel="noreferrer">
-								{done.url.replace(/^https:\/\/github.com\//, "")}
-							</a>
-						)}
-					</p>
-				)}
-				{err && <p className="merge-err">{err}</p>}
-				{mode === "merge" || mode === "pr" ? (
-					<>
-						<p className="quiet">
-							Commits {n || "no"} change{n === 1 ? "" : "s"} above, then{" "}
-							{mode === "merge" ? (
-								<>merges <b>{thread.branch}</b> into your repo's current branch. The pen is kept.</>
-							) : (
-								<>pushes <b>{thread.branch}</b> and opens a PR on GitHub.</>
-							)}
-						</p>
-						<textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={2} disabled={busy} />
-						<div className="merge-row">
-							<button onClick={() => setMode(null)} disabled={busy}>Cancel</button>
-							<button className="merge-btn" onClick={confirm} disabled={busy}>
-								{busy ? "Working…" : mode === "merge" ? "Merge" : "Open PR"}
+		</>
+	);
+}
+
+// the editor as a floating window over a blurred app (user's sketch): file view left, tree right.
+// Esc or a click on the backdrop closes it; open tabs are kept for next time.
+function FileModal(props: {
+	thread: Thread;
+	onDeleted: () => void;
+	pen: string;
+	open: string[];
+	active: string;
+	diff: boolean;
+	onToggleDiff: (on: boolean) => void;
+	onShow: (p: string, diff?: boolean) => void;
+	onClose: () => void;
+	onCloseTab: (p: string) => void;
+}) {
+	const { thread, onDeleted, pen, open, active, diff, onToggleDiff, onShow, onClose, onCloseTab } = props;
+	const data = usePenFiles(pen);
+	const [tab, setTab] = useState<ListTab>(diff ? "changes" : "files");
+	const changed = data?.changed.find((f) => f.path === active);
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onClose]);
+	return (
+		<div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+			<div className="modal-code">
+				<nav className="tabstrip">
+					{open.map((p) => (
+						<div key={p} className={`tab ${active === p ? "on" : ""}`} title={p}>
+							<button className="tab-name" onClick={() => onShow(p)}>
+								<FileIcon path={p} size={13} />
+								{p.split("/").pop()}
+							</button>
+							<button className="tab-x" onClick={() => onCloseTab(p)} aria-label={`Close ${p}`}>
+								<X size={12} strokeWidth={2} />
 							</button>
 						</div>
-					</>
-				) : mode === "delete" && warn ? (
-					<>
-						<p className="merge-err">This pen has {warn}</p>
-						<div className="merge-row">
-							<button onClick={() => { setMode(null); setWarn(null); }} disabled={busy}>Cancel</button>
-							<button className="merge-btn danger" onClick={() => del(true)} disabled={busy}>
-								{busy ? "Deleting…" : "Delete anyway"}
-							</button>
+					))}
+					<span className="spacer" />
+					<span className="tab-path mono">{active}</span>
+					{changed && changed.status !== "D" && (
+						<div className="seg">
+							<button className={diff ? "on" : ""} onClick={() => onToggleDiff(true)}>Diff</button>
+							<button className={!diff ? "on" : ""} onClick={() => onToggleDiff(false)}>File</button>
 						</div>
-					</>
-				) : (
-					<div className="merge-row">
-						<button className="merge-btn" onClick={() => open("merge")} disabled={busy}>Merge</button>
-						<button className="merge-btn" onClick={() => open("pr")} disabled={busy}>Open PR</button>
-						<button className="merge-btn danger" onClick={() => del(false)} disabled={busy}>
-							{busy ? "…" : "Delete"}
-						</button>
-					</div>
-				)}
+					)}
+				</nav>
+				<div className="file-pane">
+					<CodeView key={pen + active + diff} pen={pen} path={active} diff={diff && !!changed} />
+				</div>
 			</div>
+			<aside className="modal-tree files">
+				<FileLists data={data} tab={tab} setTab={setTab} onOpen={onShow} current={active} />
+				<GitPanel thread={thread} onDeleted={onDeleted} />
+			</aside>
+		</div>
+	);
+}
+
+function Files({ thread, onDeleted, onOpen }: { thread: Thread; onDeleted: () => void; onOpen: (path: string, diff?: boolean) => void }) {
+	const data = usePenFiles(thread.pen);
+	const [tab, setTab] = useState<ListTab>("changes");
+	return (
+		<aside className="files">
+			<FileLists data={data} tab={tab} setTab={setTab} onOpen={onOpen} />
+			<GitPanel thread={thread} onDeleted={onDeleted} />
 		</aside>
 	);
 }

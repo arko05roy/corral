@@ -101,6 +101,21 @@ declare global {
 			listPens(repo: string): Promise<Omit<Thread, "id">[]>;
 			resume(meta: { repo: string; task: string; branch: string; pen: string }, size: { cols: number; rows: number } | null): Promise<{ id: number }>;
 			files(pen: string): Promise<{ changed: { status: string; path: string }[]; all: string[]; error?: string }>;
+			readFile(pen: string, path: string): Promise<{ text?: string; binary?: true; tooBig?: true; size?: number; error?: string }>;
+			readBase(pen: string, path: string): Promise<{ text?: string; binary?: true; error?: string }>;
+			gitInfo(pen: string): Promise<GitInfo & { error?: string }>;
+			gitRun(pen: string, action: string, fields?: { message?: string; branch?: string }): Promise<{ ok?: true; text?: string; error?: string }>;
+			gitAiMessage(pen: string): Promise<{ text?: string; error?: string }>;
+			prList(pen: string, state: PrState): Promise<{ prs?: PrSummary[]; error?: string }>;
+			prView(pen: string, num: number): Promise<{ pr?: PrDetail; error?: string }>;
+			prForBranch(pen: string): Promise<{ pr?: (Pick<PrSummary, "number" | "title" | "state" | "url" | "isDraft" | "mergeStateStatus" | "reviewDecision" | "checks">) | null; error?: string }>;
+			prMerge(pen: string, num: number, method: string, deleteBranch: boolean): Promise<{ ok?: true; text?: string; error?: string }>;
+			prAct(pen: string, num: number, act: "close" | "ready" | "reopen" | "comment", body?: string): Promise<{ ok?: true; text?: string; error?: string }>;
+			prCleanup(args: { id: number | null; repo: string; pen: string; branch: string }): Promise<{ ok?: true; text?: string; error?: string }>;
+			openUrl(url: string): Promise<void>;
+			repoInfo(repo: string): Promise<{ isGit: boolean; hasCommit: boolean; remote: boolean; web: string | null; error?: string }>;
+			repoInit(repo: string): Promise<{ ok?: true; text?: string; error?: string }>;
+			repoGitHub(repo: string, name: string, visibility: "private" | "public"): Promise<{ ok?: true; text?: string; url?: string | null; error?: string }>;
 			kill(id: number): Promise<{ ok?: true; error?: string }>;
 			merge(args: { id: number | null; repo: string; pen: string; branch: string; message: string }): Promise<{ ok?: true; error?: string }>;
 			openPr(args: { pen: string; branch: string; message: string }): Promise<{ ok?: true; url?: string; error?: string }>;
@@ -127,4 +142,52 @@ export type Thread = {
 	pen: string;
 	alive?: boolean;
 	state?: "working" | "waiting"; // from Claude hooks
+};
+
+export type GitInfo = {
+	branch: string;
+	head: string;
+	main: string;
+	upstream: string | null;
+	ahead: number;
+	behind: number;
+	remote: boolean;
+	web: string | null;
+	dirty: boolean;
+	unpushed: number;
+	mainAhead: number;
+	branches: string[];
+	log: { hash: string; subject: string; when: string; author: string }[];
+	stashes: number;
+};
+
+export type PrState = "open" | "merged" | "closed" | "all";
+export type Checks = { total: number; pass: number; fail: number; pending: number };
+export type PrSummary = {
+	number: number;
+	title: string;
+	state: "OPEN" | "MERGED" | "CLOSED";
+	headRefName: string;
+	baseRefName: string;
+	isDraft: boolean;
+	url: string;
+	author: string;
+	reviewDecision: string;
+	mergeStateStatus: string;
+	additions: number;
+	deletions: number;
+	changedFiles: number;
+	updatedAt: string;
+	checks: Checks;
+	headRefOid?: string;
+};
+export type PrDetail = PrSummary & {
+	body: string;
+	mergeable: string;
+	checkList: { name: string; verdict: "pass" | "fail" | "pending" | "skip"; url?: string }[];
+	files: { path: string; additions: number; deletions: number }[];
+	comments: { author: string; bot: boolean; body: string; at: string; state?: string }[];
+	commits: number;
+	methods: ("squash" | "merge" | "rebase")[];
+	canMerge: boolean;
 };

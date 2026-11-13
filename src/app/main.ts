@@ -1,11 +1,12 @@
 // Corral window = a CLIENT of corrald. It owns no agents: quit it, crash it, agents keep running.
 import { execFileSync, spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import * as net from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { codeVersion } from "../version.ts";
+import * as G from "./git.ts";
 
 const [repoArg, ...tasks] = process.argv.slice(2);
 const SOCK = join(homedir(), ".corral", "corrald.sock");
@@ -103,6 +104,13 @@ app.whenReady().then(async () => {
 	});
 	const devUrl = process.env.CORRAL_DEV_URL;
 	// links (e.g. a PR url) open in the real browser. never a new electron window: it would inherit our preload bridge
+	// the app window never navigates away from corral (a stray link click would replace the whole UI)
+	win.webContents.on("will-navigate", (e, url) => {
+		if (url !== win.webContents.getURL()) {
+			e.preventDefault();
+			if (url.startsWith("https://")) shell.openExternal(url);
+		}
+	});
 	win.webContents.setWindowOpenHandler(({ url }) => {
 		if (url.startsWith("https://")) shell.openExternal(url);
 		return { action: "deny" };
@@ -171,21 +179,77 @@ app.whenReady().then(async () => {
 				pen: block.match(/^worktree (.+)$/m)?.[1] ?? "",
 				branch: block.match(/^branch refs\/heads\/(.+)$/m)?.[1] ?? "",
 			}))
-			.filter((p) => p.pen.startsWith(pensDir) && p.branch.startsWith("corral/"))
-			.map((p) => ({ ...p, repo, task: p.branch.replace(/^corral\//, "").replace(/-\d+$/, "").replace(/-/g, " ") }));
+			// a pen = a worktree living in ~/.corral/pens. (branch names are short and prefix-free now)
+			.filter((p) => p.pen.startsWith(pensDir) && p.branch)
+			.map((p) => {
+				// the full task is the branch description; old corral/<slug>-<n> pens fall back to the slug
+				let task = "";
+				try {
+					task = git(repo, "config", "--get", `branch.${p.branch}.description`).trim();
+				} catch {}
+				return { ...p, repo, task: task || p.branch.replace(/^corral\//, "").replace(/-\d+$/, "").replace(/-/g, " ") };
+			});
 	});
 
 	// files panel: what changed + the whole tree
+	// MERGE-BASE: the last commit the pen and the real repo both have = the moment the pen forked.
+	// diffing against it shows only what the pen did: work you commit on main after that never shows up as a
+	// phantom "claude deleted this", and committed pen work (merge, PR, claude's own commits) stays visible.
+	// from inside a pen, --git-common-dir is the shared .git, where HEAD = the main checkout's HEAD.
+	const penBase = (pen: string) => {
+		const common = resolve(pen, git(pen, "rev-parse", "--git-common-dir").trim());
+		const mainHead = git(pen, `--git-dir=${common}`, "rev-parse", "HEAD").trim();
+		return git(pen, "merge-base", "HEAD", mainHead).trim();
+	};
+
 	ipcMain.handle("files", (_e, pen: string) => {
 		try {
-			const changed = git(pen, "status", "--porcelain", "-uall")
+			// tracked: working tree vs merge-base (covers committed AND uncommitted). untracked: new files
+			const changed = git(pen, "diff", "--name-status", penBase(pen))
 				.split("\n")
 				.filter(Boolean)
-				.map((l) => ({ status: l.slice(0, 2).trim() || "?", path: l.slice(3) }));
+				.map((l) => {
+					const f = l.split("\t"); // "M\tpath" or "R100\told\tnew": the last field is the current path
+					return { status: f[0][0], path: f[f.length - 1] };
+				});
+			for (const p of git(pen, "ls-files", "--others", "--exclude-standard").split("\n").filter(Boolean))
+				changed.push({ status: "?", path: p });
 			const all = git(pen, "ls-files", "--cached", "--others", "--exclude-standard").split("\n").filter(Boolean);
 			return { changed, all };
 		} catch (err) {
 			return { changed: [], all: [], error: String((err as Error).message) };
+		}
+	});
+
+	// ── file viewer: read one file from a pen ──
+	// path comes from the renderer: resolve it and refuse anything outside the pen (../../.ssh/id_rsa)
+	const inPen = (pen: string, rel: string) => {
+		const abs = resolve(pen, rel);
+		return abs.startsWith(resolve(pen) + "/") ? abs : null;
+	};
+	ipcMain.handle("read-file", (_e, { pen, path }: { pen: string; path: string }) => {
+		const abs = inPen(pen, path);
+		if (!abs) return { error: "path outside the pen" };
+		try {
+			const size = statSync(abs).size;
+			if (size > 5 << 20) return { tooBig: true, size }; // the string still has to cross IPC whole
+			const buf = readFileSync(abs);
+			if (buf.subarray(0, 8192).includes(0)) return { binary: true, size }; // NUL byte = not text
+			return { text: buf.toString("utf8") };
+		} catch (err) {
+			return { error: String((err as Error).message) }; // deleted file in Changes → ENOENT, that's fine
+		}
+	});
+
+	// the diff's left side: the file as it was at the merge-base. not in that commit → new file → ""
+	ipcMain.handle("read-base", (_e, { pen, path }: { pen: string; path: string }) => {
+		if (!inPen(pen, path)) return { error: "path outside the pen" };
+		try {
+			const text = execFileSync("git", ["-C", pen, "show", `${penBase(pen)}:${path}`], { encoding: "utf8", maxBuffer: 5 << 20 });
+			if (text.slice(0, 8192).includes("\0")) return { binary: true };
+			return { text };
+		} catch {
+			return { text: "" }; // didn't exist at the fork point: claude created it
 		}
 	});
 
@@ -229,17 +293,43 @@ app.whenReady().then(async () => {
 	});
 
 	// push the branch and open a PR on GitHub. agent keeps running: a PR isn't the end of the work
+	// ── git command center: thin pass-through to the whitelisted recipes in git.ts ──
+	// destructive recipes (discard, undo) must only ever touch a pen, never your real checkout
+	const PENS = join(homedir(), ".corral", "pens") + "/";
+	const isPen = (p: unknown): p is string => typeof p === "string" && resolve(p).startsWith(PENS) && existsSync(p);
+	const isRepo = (p: unknown): p is string => typeof p === "string" && p.startsWith("/") && existsSync(p) && statSync(p).isDirectory();
+	ipcMain.handle("git-info", (_e, pen: string) => {
+		if (!isPen(pen)) return { error: "not a pen" };
+		return G.info(pen).catch((err) => ({ error: String((err as Error).message) }));
+	});
+	ipcMain.handle("git-run", (_e, { pen, action, fields }) => (isPen(pen) ? G.run(pen, String(action), fields ?? {}) : { error: "not a pen" }));
+	// pull requests (gh). read + merge/close/ready/comment, all scoped to a pen's repo
+	ipcMain.handle("pr-list", (_e, { pen, state }) => (isPen(pen) ? G.prs(pen, ["open", "merged", "closed", "all"].includes(state) ? state : "open") : { error: "not a pen" }));
+	ipcMain.handle("pr-view", (_e, { pen, num }) => (isPen(pen) ? G.pr(pen, Number(num)) : { error: "not a pen" }));
+	ipcMain.handle("pr-for-branch", (_e, pen: string) => (isPen(pen) ? G.prForBranch(pen) : { error: "not a pen" }));
+	ipcMain.handle("pr-merge", (_e, { pen, num, method, deleteBranch }) => (isPen(pen) ? G.prMerge(pen, Number(num), String(method), !!deleteBranch) : { error: "not a pen" }));
+	ipcMain.handle("pr-act", (_e, { pen, num, act, body }) => (isPen(pen) ? G.prAct(pen, Number(num), act, String(body ?? "")) : { error: "not a pen" }));
+	ipcMain.handle("git-ai-message", (_e, pen: string) => (isPen(pen) ? G.aiMessage(pen, process.env.CORRAL_AGENT ?? "claude") : { error: "not a pen" }));
+	ipcMain.handle("open-url", (_e, url: string) => {
+		if (/^https:\/\//.test(url)) shell.openExternal(url); // https only: never file:// or app links
+	});
+	// repo setup: plain folder → git init → GitHub
+	ipcMain.handle("repo-info", (_e, repo: string) => (isRepo(repo) ? G.repoInfo(repo) : { error: "not a folder" }));
+	ipcMain.handle("repo-init", (_e, repo: string) => (isRepo(repo) ? G.init(repo) : { error: "not a folder" }));
+	ipcMain.handle("repo-github", (_e, { repo, name, visibility }) =>
+		isRepo(repo) ? G.connectGitHub(repo, String(name), visibility === "public" ? "public" : "private") : { error: "not a folder" },
+	);
+
 	ipcMain.handle("open-pr", async (_e, { pen, branch, message }) => {
+		// async (G.git / G.sh): a push + gh round-trip takes seconds and must not freeze the main process
 		try {
 			commitIfDirty(pen, message);
-			git(pen, "push", "-q", "-u", "origin", branch);
-			const url = execFileSync("gh", ["pr", "create", "--head", branch, "--title", message, "--body", "Opened from Corral."], {
-				cwd: pen,
-				encoding: "utf8",
-			}).trim();
-			return { ok: true, url };
+			await G.git(pen, "push", "-q", "-u", "origin", branch);
+			const r = await G.sh("gh", ["pr", "create", "--head", branch, "--title", message, "--body", "Opened from Corral."], { cwd: pen, timeout: 60_000 });
+			if (r.error || r.status !== 0) return { error: (r.error?.message ?? (r.stderr || r.stdout)).trim().split("\n").slice(0, 4).join("\n") };
+			return { ok: true, url: r.stdout.trim().split("\n").pop() };
 		} catch (err) {
-			return fail(err);
+			return { error: String((err as { stderr?: string }).stderr || (err as Error).message) };
 		}
 	});
 
@@ -250,16 +340,33 @@ app.whenReady().then(async () => {
 			const dirty = git(pen, "status", "--porcelain").trim() !== "";
 			const merged = git(repo, "branch", "--merged", "HEAD", "--format=%(refname:short)").split("\n").includes(branch);
 			if (!force && (dirty || !merged)) return { needsForce: true, dirty, merged };
-			await stopAgent(id);
-			const tmp = join(dirname(pen), `.corral-delete-${Date.now()}`);
-			renameSync(pen, tmp);
-			git(repo, "worktree", "prune");
-			git(repo, "branch", "-D", branch); // safe to force: we checked merged/dirty above (or the user said force)
-			spawn("/bin/rm", ["-rf", tmp], { detached: true, stdio: "ignore" }).unref();
+			await removePen(id, repo, pen, branch);
 			return { ok: true };
 		} catch (err) {
 			return fail(err);
 		}
+	});
+	async function removePen(id: number | null, repo: string, pen: string, branch: string) {
+		await stopAgent(id);
+		const tmp = join(dirname(pen), `.corral-delete-${Date.now()}`);
+		renameSync(pen, tmp);
+		git(repo, "worktree", "prune");
+		git(repo, "branch", "-D", branch); // safe to force: callers checked merged/dirty (or the user said force)
+		spawn("/bin/rm", ["-rf", tmp], { detached: true, stdio: "ignore" }).unref();
+	}
+
+	// after a PR merge: GitHub (not local git) confirms it's merged → fast-forward your real main → delete the thread
+	ipcMain.handle("pr-cleanup", async (_e, { id, repo, pen, branch }) => {
+		if (!isPen(pen)) return { error: "not a pen" };
+		const done = await G.mergedAndClean(pen);
+		if (done.error) return { error: done.error };
+		const up = await G.run(pen, "update-main", {}); // best effort: a dirty main shouldn't block the cleanup
+		try {
+			await removePen(id, repo, pen, branch);
+		} catch (err) {
+			return fail(err);
+		}
+		return { ok: true, text: up.ok ? `Cleaned up #${done.number}. ${up.text}` : `Thread deleted. Local main not updated: ${up.error}` };
 	});
 
 	ipcMain.handle("pick-repo", async () => {

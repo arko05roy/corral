@@ -23,3 +23,7 @@
 - 2026-11-13: auto-start corrald via spawn detached:true (setsid) + unref, retry connect 5s; stdio to ~/.corral/corrald.log.
 - 2026-11-13: kill-thread = SIGHUP agent (SIGKILL after 3s), pen kept; dead threads resume like dormant ones.
 - 2026-11-13 daemon versioning: auto hash of daemon source (not manual constant) + silent auto-restart on mismatch at app launch (tried ask-first banner, user rejected: internals shouldn't leak to the user). Cost: any daemon code edit stops running agents on next launch; they resume via --continue.
+- 2026-11-13 product direction: Corral = one window replacing terminal + editor (viewer+diff first, then shell tabs, editing last).
+- 2026-11-13 editor: CodeMirror 6 over Monaco (themeable, Corral look). File viewer as blurred modal with tree (user sketch).
+- 2026-11-13 diff baseline: merge-base, after demo showed "real repo now" fakes deletions.
+- 2026-11-13 git: full lazy-git panel, grouped list layout; pull = from a picked branch; branches short + prefix-free, internals hidden; push into main allowed (no -u); PR window blurred like the file viewer.
