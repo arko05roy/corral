@@ -6,6 +6,9 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import * as pty from "node-pty";
 import { createPen } from "./pens.ts";
+import { codeVersion } from "./version.ts";
+
+const VERSION = codeVersion(); // hashed once at boot: the code this process actually loaded
 
 const HOME = join(homedir(), ".corral");
 const SOCK = join(HOME, "corrald.sock");
@@ -89,6 +92,9 @@ function spawnAgent(meta: Omit<Agent, "id" | "term" | "state">, args: string[], 
 function handle(c: net.Socket, msg: any) {
 	const reply = (data: object) => send(c, { type: "reply", reqId: msg.reqId, ...data });
 	switch (msg.type) {
+		case "hello":
+			// handshake: the app compares our version with the source on disk to spot a stale daemon
+			return reply({ version: VERSION, pid: process.pid, agents: agents.size });
 		case "list":
 			// replay FIRST, then the reply. one ordered socket + same sync tick = no live byte can cut in between
 			for (const a of agents.values()) if (a.history) send(c, { type: "out", id: a.id, text: a.history });
@@ -161,5 +167,5 @@ fs.rmSync(SOCK, { force: true });
 process.umask(0o077); // socket is BORN owner-only (chmod after listen would leave a tiny open window)
 server.listen(SOCK, () => {
 	fs.chmodSync(SOCK, 0o600); // belt and braces: only this user may connect; the kernel enforces it
-	console.log(`corrald listening on ${SOCK} (agent: ${agentCmd})`);
+	console.log(`corrald listening on ${SOCK} (agent: ${agentCmd}, version: ${VERSION})`);
 });

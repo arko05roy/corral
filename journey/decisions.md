@@ -22,3 +22,4 @@
 - 2026-11-12: UI switched to dark-only neutral grayscale matching Paradev (user: hated cobalt/cream theme). System UI font + SF Mono; amber kept as the single 'needs you' color.
 - 2026-11-13: auto-start corrald via spawn detached:true (setsid) + unref, retry connect 5s; stdio to ~/.corral/corrald.log.
 - 2026-11-13: kill-thread = SIGHUP agent (SIGKILL after 3s), pen kept; dead threads resume like dormant ones.
+- 2026-11-13 daemon versioning: auto hash of daemon source (not manual constant) + silent auto-restart on mismatch at app launch (tried ask-first banner, user rejected: internals shouldn't leak to the user). Cost: any daemon code edit stops running agents on next launch; they resume via --continue.

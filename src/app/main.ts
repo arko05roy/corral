@@ -5,6 +5,7 @@ import * as net from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { codeVersion } from "../version.ts";
 
 const [repoArg, ...tasks] = process.argv.slice(2);
 const SOCK = join(homedir(), ".corral", "corrald.sock");
@@ -16,6 +17,50 @@ app.whenReady().then(async () => {
 			const s = net.connect(SOCK, () => ok(s));
 			s.once("error", fail);
 		});
+	// ── version handshake (Paradev: hello + protocolVersion, restart a mismatched daemon). ours: the version is
+	// a hash of the daemon's source, and the check runs BEFORE any window exists, so no stale UI state survives.
+	// own throwaway connection: live agents broadcast output to every client, and a half-read line must never
+	// leak into the main connection's parser.
+	const probe = () =>
+		new Promise<"none" | { version?: string; pid?: number }>((ok) => {
+			const s = net.connect(SOCK);
+			s.once("error", () => ok("none"));
+			let buf = "";
+			const done = (r: { version?: string; pid?: number }) => (s.destroy(), ok(r));
+			const t = setTimeout(() => done({}), 1000); // pre-handshake daemon never answers "hello"
+			s.on("connect", () => s.write(JSON.stringify({ type: "hello", reqId: 0 }) + "\n"));
+			s.on("data", (d) => {
+				buf += d;
+				for (const line of buf.split("\n"))
+					if (line.includes('"reqId":0')) {
+						clearTimeout(t);
+						return done(JSON.parse(line));
+					}
+			});
+		});
+	// old daemons don't report a pid: ask the kernel who's listening on the socket
+	const socketOwner = () => {
+		try {
+			return Number(execFileSync("lsof", ["-t", SOCK], { encoding: "utf8" }).split("\n")[0]) || undefined;
+		} catch {
+			return undefined;
+		}
+	};
+	const found = await probe();
+	if (found !== "none" && found.version !== codeVersion()) {
+		// stale daemon: kill it (SIGHUPs its agents; their pens stay, threads show up resumable) and wait for
+		// the socket to stop answering, so the auto-start below spawns the fresh code
+		const pid = found.pid ?? socketOwner();
+		console.log(`corrald outdated (running ${found.version ?? "pre-handshake"}, source ${codeVersion()}) → restarting pid ${pid}`);
+		if (pid) {
+			try {
+				process.kill(pid, "SIGTERM");
+			} catch {}
+			for (let i = 0; i < 30 && (await connect().then((s) => (s.destroy(), true)).catch(() => false)); i++)
+				await new Promise((r) => setTimeout(r, 100));
+		}
+	}
+
 	let sock: net.Socket;
 	try {
 		sock = await connect();
