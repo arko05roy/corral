@@ -99,6 +99,7 @@ app.whenReady().then(async () => {
 		return r.error ? { error: r.error } : r.thread;
 	});
 	ipcMain.handle("resume", async (_e, meta) => (await rpc({ type: "resume", meta })) as { id: number });
+	ipcMain.handle("kill", async (_e, id: number) => await rpc({ type: "kill", id }));
 	ipcMain.on("in", (_e, { id, text }) => write({ type: "in", id, text }));
 	// daemon resizes the PTY; the kernel then sends SIGWINCH to the agent
 	ipcMain.on("resize", (_e, { id, cols, rows }) => write({ type: "resize", id, cols, rows }));

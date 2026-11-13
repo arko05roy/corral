@@ -104,6 +104,17 @@ function handle(c: net.Socket, msg: any) {
 			const a = spawnAgent(msg.meta, agentCmd === "claude" ? ["--continue"] : [], "waiting");
 			return reply({ id: a.id });
 		}
+		case "kill": {
+			// SIGHUP = "your terminal hung up": what claude would get if a real terminal closed.
+			// pen stays on disk, so the thread can be resumed. Ignored for 3s → SIGKILL (can't be caught).
+			const a = agents.get(msg.id);
+			if (!a) return reply({ error: "no such agent" });
+			a.term.kill("SIGHUP");
+			setTimeout(() => {
+				if (agents.get(msg.id) === a) a.term.kill("SIGKILL");
+			}, 3000);
+			return reply({ ok: true }); // the "exited" broadcast comes from onExit, like any other death
+		}
 		case "in":
 			return agents.get(msg.id)?.term.write(msg.text);
 		case "resize":

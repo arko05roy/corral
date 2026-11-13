@@ -18,3 +18,4 @@
 - ~~Fixed 100x30~~ → fit addon + pty.resize (SIGWINCH).
 - ~~"branch already exists" on restart~~ → createPen skips taken names.
 - ~~Agents die with the app~~ → corrald + replay buffer (v4).
+- kill signals only the agent pid; its children rely on the kernel HUPing the PTY's process group (no explicit process-tree kill like Paradev).

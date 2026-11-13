@@ -9,6 +9,7 @@ import {
 	Lightbulb,
 	PanelRight,
 	Plus,
+	Square,
 	SquarePen,
 	Terminal as TerminalIcon,
 } from "lucide-react";
@@ -51,7 +52,8 @@ export function App() {
 
 	async function select(t: Thread) {
 		setActive(t.pen);
-		if (t.id === null) {
+		if (!t.alive) {
+			// dormant (never ran this session) or dead (exited/killed): either way, wake it with --continue
 			const { id } = await window.corral.resume({ repo: t.repo, task: t.task, branch: t.branch, pen: t.pen });
 			upsert([{ ...t, id, alive: true, state: "waiting" }]); // resumed = sitting at the prompt
 		}
@@ -130,6 +132,16 @@ export function App() {
 								{current.branch}
 							</span>
 							<span className="spacer" />
+							{current.alive && current.id !== null && (
+								<button
+									className="icon-btn"
+									onClick={() => window.corral.kill(current.id!)}
+									title="Stop agent (pen is kept; click the thread to resume)"
+									aria-label="Stop agent"
+								>
+									<Square size={13} strokeWidth={1.75} />
+								</button>
+							)}
 							<button
 								className={`icon-btn ${filesOpen ? "on" : ""}`}
 								onClick={() => setFilesOpen((o) => !o)}
@@ -192,7 +204,7 @@ function RepoGroup(props: {
 							<button
 								className={`thread ${t.pen === props.active ? "active" : ""} ${t.alive ? `alive ${t.state ?? ""}` : t.id === null ? "dormant" : "dead"}`}
 								onClick={() => props.onSelect(t)}
-								title={t.id === null ? `${t.branch} · click to resume` : t.branch}
+								title={t.alive ? t.branch : `${t.branch} · click to resume`}
 							>
 								<span className="lamp" aria-label={!t.alive ? "agent not running" : t.state === "waiting" ? "needs you" : "working"} />
 								<span className="name">{t.task}</span>
