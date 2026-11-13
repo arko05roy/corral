@@ -41,7 +41,12 @@ const errText = (err: unknown) => {
 // the main checkout's branch + the pen's fork point (see main.ts penBase for the why)
 const commonDir = async (pen: string) => resolve(pen, (await git(pen, "rev-parse", "--git-common-dir")).trim());
 export const mainBranch = async (pen: string) => (await git(pen, `--git-dir=${await commonDir(pen)}`, "rev-parse", "--abbrev-ref", "HEAD")).trim();
-export const mergeBase = async (pen: string) => (await git(pen, "merge-base", "HEAD", await mainBranch(pen))).trim();
+// newest point shared with local main OR GitHub's main (see main.ts penBase): pushed-to-main work isn't "ours" anymore
+export const mergeBase = async (pen: string) => {
+	const m = await mainBranch(pen);
+	const remote = (await ok(pen, "rev-parse", "--verify", "-q", `refs/remotes/origin/${m}`)) ? [`origin/${m}`] : [];
+	return (await git(pen, "merge-base", "HEAD", m, ...remote)).trim();
+};
 const head = async (pen: string) => (await git(pen, "rev-parse", "HEAD")).trim();
 
 async function validBranch(cwd: string, name: string) {

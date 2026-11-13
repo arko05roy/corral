@@ -199,7 +199,14 @@ app.whenReady().then(async () => {
 	const penBase = (pen: string) => {
 		const common = resolve(pen, git(pen, "rev-parse", "--git-common-dir").trim());
 		const mainHead = git(pen, `--git-dir=${common}`, "rev-parse", "HEAD").trim();
-		return git(pen, "merge-base", "HEAD", mainHead).trim();
+		const mainName = git(pen, `--git-dir=${common}`, "rev-parse", "--abbrev-ref", "HEAD").trim();
+		// newest point shared with your local main OR GitHub's main: after "push → main" your local checkout
+		// is still behind, and diffing against it would list already-shipped work as changes
+		let remoteMain: string[] = [];
+		try {
+			remoteMain = [git(pen, "rev-parse", "--verify", "-q", `refs/remotes/origin/${mainName}`).trim()];
+		} catch {} // no remote / never fetched
+		return git(pen, "merge-base", "HEAD", mainHead, ...remoteMain).trim();
 	};
 
 	ipcMain.handle("files", (_e, pen: string) => {
